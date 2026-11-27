@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Sambient.App.ViewModels;
 using Sambient.Engine;
 
 namespace Sambient.App.Controls;
@@ -19,6 +20,9 @@ public class PianoKeyboard : Avalonia.Controls.Control
     public static readonly StyledProperty<int> OctavesProperty = AvaloniaProperty.Register<PianoKeyboard, int>(nameof(Octaves), 3);
     public static readonly StyledProperty<HeldNoteTracker?> StateProperty = AvaloniaProperty.Register<PianoKeyboard, HeldNoteTracker?>(nameof(State));
 
+    public static readonly StyledProperty<LatchedNoteSet?> LatchedProperty = AvaloniaProperty.Register<PianoKeyboard, LatchedNoteSet?>(nameof(Latched));
+    public static readonly StyledProperty<bool> HoldModeProperty = AvaloniaProperty.Register<PianoKeyboard, bool>(nameof(HoldMode));
+
     private const int MinVelocity = 40, MaxVelocity = 127;
     private static readonly int[] WhiteOffsets = [0, 2, 4, 5, 7, 9, 11];
     private static readonly bool[] BlackAfterDegree = [true, true, false, true, true, true, false];
@@ -28,15 +32,22 @@ public class PianoKeyboard : Avalonia.Controls.Control
     private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.Parse("#5fb3ff"));
     private static readonly IBrush ActiveBlackBrush = new SolidColorBrush(Color.Parse("#3a86d6"));
     private static readonly Pen EdgePen = new(new SolidColorBrush(Color.Parse("#0e1013")), 1);
+    private static readonly IBrush LatchedBrush = new SolidColorBrush(Color.Parse("#ffb454"));
+    private static readonly IBrush LatchedBlackBrush = new SolidColorBrush(Color.Parse("#d9902f"));
     private static readonly IBrush LabelBrush = new SolidColorBrush(Color.Parse("#6b7180"));
 
     private int _mouseNote = -1;
     private HeldNoteTracker? _subscribed;
+    private LatchedNoteSet? _subscribedLatched;
 
     static PianoKeyboard() => AffectsRender<PianoKeyboard>(BaseOctaveProperty, OctavesProperty);
 
     public int BaseOctave { get => GetValue(BaseOctaveProperty); set => SetValue(BaseOctaveProperty, value); }
     public int Octaves { get => GetValue(OctavesProperty); set => SetValue(OctavesProperty, value); }
+    /// <summary>HOLD-latched notes of the displayed layer, drawn in a distinct colour.</summary>
+    public LatchedNoteSet? Latched { get => GetValue(LatchedProperty); set => SetValue(LatchedProperty, value); }
+    /// <summary>True while HOLD is on: a click only toggles the key (no glissando across keys while the button is down).</summary>
+    public bool HoldMode { get => GetValue(HoldModeProperty); set => SetValue(HoldModeProperty, value); }
     public HeldNoteTracker? State { get => GetValue(StateProperty); set => SetValue(StateProperty, value); }
 
     /// <summary>(note, velocity)</summary>
@@ -53,6 +64,13 @@ public class PianoKeyboard : Avalonia.Controls.Control
             if (_subscribed != null) _subscribed.Changed -= OnStateChanged;
             _subscribed = change.NewValue as HeldNoteTracker;
             if (_subscribed != null) _subscribed.Changed += OnStateChanged;
+            InvalidateVisual();
+        }
+        else if (change.Property == LatchedProperty)
+        {
+            if (_subscribedLatched != null) _subscribedLatched.Changed -= OnStateChanged;
+            _subscribedLatched = change.NewValue as LatchedNoteSet;
+            if (_subscribedLatched != null) _subscribedLatched.Changed += OnStateChanged;
             InvalidateVisual();
         }
         else if (change.Property == BaseOctaveProperty)
@@ -130,7 +148,7 @@ public class PianoKeyboard : Avalonia.Controls.Control
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
-        if (_mouseNote < 0) return;
+        if (_mouseNote < 0 || HoldMode) return;
         int note = HitTest(e.GetPosition(this), out double yf);
         if (note == _mouseNote) return;
         int old = _mouseNote;
@@ -161,13 +179,15 @@ public class PianoKeyboard : Avalonia.Controls.Control
     {
         double ww = WhiteWidth, h = Bounds.Height, bw = BlackWidth, bh = BlackHeight;
         var state = State;
+        var latched = Latched;
         int count = WhiteCount;
 
         for (int i = 0; i < count; i++)
         {
             int note = WhiteNote(i);
             var rect = new Rect(i * ww, 0, ww, h);
-            ctx.DrawRectangle(state?.IsSounding(note) == true ? ActiveBrush : WhiteBrush, EdgePen, rect);
+            ctx.DrawRectangle(latched?.IsLatched(note) == true ? LatchedBrush
+                : state?.IsSounding(note) == true ? ActiveBrush : WhiteBrush, EdgePen, rect);
             if (note % 12 == 0)
             {
                 var ft = new FormattedText("C" + (note / 12 - 1), CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
@@ -180,7 +200,8 @@ public class PianoKeyboard : Avalonia.Controls.Control
             if (!BlackAfterDegree[i % 7]) continue;
             int note = WhiteNote(i) + 1;
             var rect = new Rect((i + 1) * ww - bw / 2, 0, bw, bh);
-            ctx.DrawRectangle(state?.IsSounding(note) == true ? ActiveBlackBrush : BlackBrush, EdgePen, rect, 0, 0);
+            ctx.DrawRectangle(latched?.IsLatched(note) == true ? LatchedBlackBrush
+                : state?.IsSounding(note) == true ? ActiveBlackBrush : BlackBrush, EdgePen, rect, 0, 0);
         }
     }
 }

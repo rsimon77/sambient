@@ -95,6 +95,12 @@ public sealed class AudioEngine : IAudioCallback
     public bool NoteOn(int layer, int note, int velocity) => Post(EngineEventType.NoteOn, layer, note, velocity, 0f);
     public bool NoteOff(int layer, int note) => Post(EngineEventType.NoteOff, layer, note, 0, 0f);
     public bool AllNotesOff() => Post(EngineEventType.AllNotesOff, 0, 0, 0, 0f);
+    /// <summary>HOLD (OK + key): latches the key on the layer, or releases it if already latched.</summary>
+    public bool HoldToggle(int layer, int note, int velocity) => Post(EngineEventType.HoldToggle, layer, note, velocity, 0f);
+    /// <summary>CLR + OK: releases all HOLD-latched keys of one layer.</summary>
+    public bool ClearHolds(int layer) => Post(EngineEventType.ClearHolds, layer, 0, 0, 0f);
+    /// <summary>CLR + PLAY: releases all HOLD-latched keys of every layer.</summary>
+    public bool ClearAllHolds() => Post(EngineEventType.ClearAllHolds, 0, 0, 0, 0f);
     public bool PitchBend(float value) => Post(EngineEventType.PitchBend, 0, 0, 0, value);
     public bool ModWheel(float value) => Post(EngineEventType.ModWheel, 0, 0, 0, value);
     public bool Sustain(bool down) => Post(EngineEventType.Sustain, 0, 0, 0, down ? 1f : 0f);
@@ -123,6 +129,10 @@ public sealed class AudioEngine : IAudioCallback
         {
             if (layer == NoiseLayerIndex) Noise.EnsureBuiltAsync((int)v);
             else Bank.EnsureBuiltAsync((int)v);
+        }
+        else if (id == ParamId.Structure && layer != NoiseLayerIndex && StructureInfo.IsDrone((Structure)(int)v))
+        {
+            Parameters.Set(layer, ParamId.Octave, -2);      // as the hardware: DRONE structures default to octave -2
         }
         return v;
     }
@@ -191,8 +201,11 @@ public sealed class AudioEngine : IAudioCallback
         for (int i = 0; i < LayerCount; i++)
         {
             _mute[i].SetTarget(Parameters.Get(i, ParamId.Mute) >= 0.5f ? 0f : 1f);
-            _revSend[i].SetTarget(ParamCurves.SendGain(Parameters.Get(i, ParamId.ReverbSend)));
-            _shimSend[i].SetTarget(ParamCurves.SendGain(Parameters.Get(i, ParamId.ShimmerSend)));
+            // LFO -> REVERB / SHIMMER send modulation (layer-level LFO, from the previous block), in send-knob units
+            var lm = (_layers[i] as IModulatedLayer)?.Mod;
+            float rOff = lm?.ReverbSendOffset ?? 0f, sOff = lm?.ShimmerSendOffset ?? 0f;
+            _revSend[i].SetTarget(ParamCurves.SendGain(Parameters.Get(i, ParamId.ReverbSend) + rOff));
+            _shimSend[i].SetTarget(ParamCurves.SendGain(Parameters.Get(i, ParamId.ShimmerSend) + sOff));
         }
     }
 
@@ -250,6 +263,15 @@ public sealed class AudioEngine : IAudioCallback
                 break;
             case EngineEventType.NoteOff:
                 if (ev.Layer < _layers.Length) _layers[ev.Layer].NoteOff(ev.Note);
+                break;
+            case EngineEventType.HoldToggle:
+                if (ev.Layer < _layers.Length) _layers[ev.Layer].HoldToggle(ev.Note, ev.Velocity);
+                break;
+            case EngineEventType.ClearHolds:
+                if (ev.Layer < _layers.Length) _layers[ev.Layer].ClearHolds();
+                break;
+            case EngineEventType.ClearAllHolds:
+                foreach (var l in _layers) l.ClearHolds();
                 break;
             case EngineEventType.AllNotesOff:
                 foreach (var l in _layers) l.AllNotesOff();

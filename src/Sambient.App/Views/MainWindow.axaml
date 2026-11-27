@@ -6,7 +6,81 @@
         x:Class="Sambient.App.Views.MainWindow"
         x:DataType="vm:MainViewModel"
         Title="Sambient" Width="1100" Height="800" MinWidth="860" MinHeight="560">
+  <Window.DataTemplates>
+    <!-- list-parameter entries (combo boxes and segmented buttons) -->
+    <DataTemplate x:DataType="vm:ChoiceOption">
+      <TextBlock Text="{Binding Text}" />
+    </DataTemplate>
+    <!-- a knob view model renders as a Knob wherever it is used as content -->
+    <DataTemplate x:DataType="vm:ParamKnobViewModel">
+      <c:Knob Label="{Binding Label}" Value="{Binding Value, Mode=TwoWay}" Minimum="{Binding Minimum}"
+              Maximum="{Binding Maximum}" DefaultValue="{Binding DefaultValue}" DisplayText="{Binding DisplayText}"
+              IsBipolar="{Binding IsBipolar}" IsLearning="{Binding IsLearning}" MidiTarget="{Binding MidiTarget}"
+              IsEnabled="{Binding IsEnabled}" Opacity="{Binding Opacity}"
+              LearnCommand="{Binding LearnCommand}" ClearMappingCommand="{Binding ClearMappingCommand}" Margin="2,0" />
+    </DataTemplate>
+    <DataTemplate x:DataType="vm:LfoPanelViewModel">
+      <Border Classes="sub">
+        <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto">
+          <TextBlock Grid.ColumnSpan="2" Text="{Binding Title}" FontWeight="Bold" Margin="0,0,0,6" />
+          <Grid Grid.Row="1" ColumnDefinitions="*,*,*" ColumnSpacing="6">
+            <StackPanel Grid.Column="0" Spacing="2">
+              <TextBlock Text="SHAPE" Classes="caption" />
+              <ComboBox ItemsSource="{Binding Shape.Options}" SelectedItem="{Binding Shape.Selected}" HorizontalAlignment="Stretch" MaxDropDownHeight="380" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Spacing="2">
+              <TextBlock Text="ASSIGN" Classes="caption" />
+              <ComboBox ItemsSource="{Binding Assign.Options}" SelectedItem="{Binding Assign.Selected}" HorizontalAlignment="Stretch" MaxDropDownHeight="380" />
+            </StackPanel>
+            <StackPanel Grid.Column="2" Spacing="2">
+              <TextBlock Text="TRIG" Classes="caption" />
+              <ComboBox ItemsSource="{Binding Trig.Options}" SelectedItem="{Binding Trig.Selected}" HorizontalAlignment="Stretch" MaxDropDownHeight="380" />
+            </StackPanel>
+          </Grid>
+          <c:LfoPreview Grid.Row="2" Height="46" Margin="0,8,0,0" Shape="{Binding Shape.Selected.Value}" Depth="{Binding DepthKnob.Value}" />
+          <StackPanel Grid.Column="1" Grid.RowSpan="3" Grid.Row="1" Orientation="Horizontal" Margin="10,0,0,0" VerticalAlignment="Center">
+            <ContentControl Content="{Binding RateKnob}" />
+            <ContentControl Content="{Binding DepthKnob}" />
+          </StackPanel>
+        </Grid>
+      </Border>
+    </DataTemplate>
+  </Window.DataTemplates>
   <Window.Styles>
+    <Style Selector="Border.sub">
+      <Setter Property="Background" Value="#1a1d23" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="BorderBrush" Value="#2a2e37" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Padding" Value="10" />
+    </Style>
+    <!-- segmented buttons: a horizontal ListBox -->
+    <Style Selector="ListBox.seg">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="ItemsPanel">
+        <ItemsPanelTemplate>
+          <StackPanel Orientation="Horizontal" Spacing="2" />
+        </ItemsPanelTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="ListBox.seg ListBoxItem">
+      <Setter Property="Padding" Value="10,5" />
+      <Setter Property="MinWidth" Value="46" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Background" Value="#2b2f38" />
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="IsEnabled" Value="{ReflectionBinding IsEnabled}" />
+    </Style>
+    <Style Selector="ListBox.seg ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#b3261e" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="ToggleButton.hold:checked /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#ffb454" />
+      <Setter Property="Foreground" Value="#16181d" />
+    </Style>
     <Style Selector="Button.select">
       <Setter Property="HorizontalAlignment" Value="Stretch" />
       <Setter Property="HorizontalContentAlignment" Value="Left" />
@@ -153,7 +227,8 @@
                 </Grid>
               </StackPanel>
 
-              <ItemsControl Grid.Column="2" ItemsSource="{Binding LayerKnobs}" VerticalAlignment="Top">
+              <StackPanel Grid.Column="2" Spacing="12">
+              <ItemsControl ItemsSource="{Binding LayerKnobs}" VerticalAlignment="Top">
                 <ItemsControl.ItemsPanel>
                   <ItemsPanelTemplate>
                     <WrapPanel />
@@ -169,7 +244,65 @@
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
+
+              <!-- OSC / STRUCTURE + MOD -->
+              <Border Classes="sub">
+                <StackPanel Spacing="8">
+                  <Grid ColumnDefinitions="Auto,Auto,*">
+                    <TextBlock Grid.Column="0" Text="OSC / STRUCTURE" Classes="caption" VerticalAlignment="Center" Margin="0,0,12,0" />
+                    <ListBox Grid.Column="1" Classes="seg" IsVisible="{Binding IsSynthLayer}"
+                             ItemsSource="{Binding StructureChoice.Options}" SelectedItem="{Binding StructureChoice.Selected}" />
+                    <TextBlock Grid.Column="1" Text="NOISE layer: no structure" Classes="caption" IsVisible="{Binding IsNoiseLayer}" VerticalAlignment="Center" />
+                    <c:StructureDiagram Grid.Column="2" Structure="{Binding StructureIndex}" HorizontalAlignment="Left" Margin="14,0,0,0" />
+                  </Grid>
+                  <Grid ColumnDefinitions="Auto,Auto,Auto,12,Auto,Auto,12,*">
+                    <ContentControl Grid.Column="0" Content="{Binding PitchKnob}" />
+                    <ContentControl Grid.Column="1" Content="{Binding DetuneKnob}" />
+                    <ContentControl Grid.Column="2" Content="{Binding BalanceKnob}" />
+                    <ContentControl Grid.Column="4" Content="{Binding ModRateKnob}" />
+                    <ContentControl Grid.Column="5" Content="{Binding ModDepthKnob}" />
+                    <StackPanel Grid.Column="7" Spacing="4" VerticalAlignment="Top" Margin="0,6,0,0">
+                      <TextBlock Text="MOD SHAPE" Classes="caption" />
+                      <ComboBox ItemsSource="{Binding ModShapeChoice.Options}" SelectedItem="{Binding ModShapeChoice.Selected}"
+                                MinWidth="110" MaxDropDownHeight="380" />
+                      <c:LfoPreview Height="34" Shape="{Binding ModShapeChoice.Selected.Value}" Depth="{Binding ModDepthKnob.Value}" />
+                      <TextBlock Text="{Binding ModCaption}" Classes="caption" Foreground="#5fb3ff" />
+                    </StackPanel>
+                  </Grid>
+                </StackPanel>
+              </Border>
+              </StackPanel>
             </Grid>
+
+            <!-- LFO 1 / LFO 2 -->
+            <Grid ColumnDefinitions="*,12,*">
+              <ContentControl Grid.Column="0" Content="{Binding Lfo1}" />
+              <ContentControl Grid.Column="2" Content="{Binding Lfo2}" />
+            </Grid>
+
+            <!-- VOICE -->
+            <Border Classes="sub">
+              <Grid ColumnDefinitions="Auto,Auto,*">
+                <TextBlock Grid.Column="0" Text="VOICE" Classes="caption" VerticalAlignment="Center" Margin="0,0,12,0" />
+                <ListBox Grid.Column="1" Classes="seg" VerticalAlignment="Center"
+                         ItemsSource="{Binding VoiceModeChoice.Options}" SelectedItem="{Binding VoiceModeChoice.Selected}" />
+                <Grid Grid.Column="2" Margin="20,0,0,0" MinHeight="104">
+                  <ContentControl Content="{Binding GlideKnob}" IsVisible="{Binding IsGlideVisible}" HorizontalAlignment="Left" />
+                  <ContentControl Content="{Binding UnisonDetuneKnob}" IsVisible="{Binding IsUnisonVisible}" HorizontalAlignment="Left" />
+                  <StackPanel Orientation="Horizontal" Spacing="12" IsVisible="{Binding IsArpVisible}" VerticalAlignment="Center">
+                    <StackPanel Spacing="2">
+                      <TextBlock Text="ARP TYPE" Classes="caption" />
+                      <ComboBox ItemsSource="{Binding ArpTypeChoice.Options}" SelectedItem="{Binding ArpTypeChoice.Selected}" MinWidth="100" MaxDropDownHeight="380" />
+                    </StackPanel>
+                    <StackPanel Spacing="2">
+                      <TextBlock Text="NOTE" Classes="caption" />
+                      <ComboBox ItemsSource="{Binding StepNoteChoice.Options}" SelectedItem="{Binding StepNoteChoice.Selected}" MinWidth="100" MaxDropDownHeight="380" />
+                    </StackPanel>
+                  </StackPanel>
+                  <TextBlock Text="POLY: no voice adjustment" Classes="caption" IsVisible="{Binding IsVoiceAdjEmpty}" VerticalAlignment="Center" />
+                </Grid>
+              </Grid>
+            </Border>
           </StackPanel>
         </Border>
 
@@ -241,8 +374,13 @@
           <Button Classes="small" Content="▶" Command="{Binding KeyboardOctaveUpCommand}" />
           <TextBlock Classes="caption" VerticalAlignment="Center" Margin="12,0,0,0"
                      Text="Computer keys: A W S E D F T G Y/Z H U J K O L P  ·  octave: , and ." />
+          <ToggleButton Classes="small hold" Content="HOLD" IsChecked="{Binding HoldMode}" Margin="12,0,0,0" VerticalAlignment="Center"
+                        ToolTip.Tip="While on, a key click (or computer key) latches / unlatches the note on the selected layer" />
+          <Button x:Name="ReleaseHoldsButton" Classes="small" Content="Release holds" VerticalAlignment="Center"
+                  ToolTip.Tip="Release the latched notes of the selected layer (Shift+click: all layers)" />
         </StackPanel>
-        <c:PianoKeyboard x:Name="Piano" Height="130" BaseOctave="{Binding KeyboardOctave}" State="{Binding Notes}" />
+        <c:PianoKeyboard x:Name="Piano" Height="130" BaseOctave="{Binding KeyboardOctave}" State="{Binding Notes}"
+                         Latched="{Binding Latched}" HoldMode="{Binding HoldMode}" />
       </StackPanel>
     </Border>
 
@@ -255,8 +393,9 @@
       </StackPanel>
       <TextBlock Grid.Column="1" Text="{Binding VoicesText}" Classes="caption" Margin="0,0,16,0" VerticalAlignment="Center" />
       <StackPanel Grid.Column="2" Spacing="2" Width="120" VerticalAlignment="Center">
-        <ProgressBar Minimum="0" Maximum="1" Value="{Binding MeterL}" Height="4" MinHeight="4" />
-        <ProgressBar Minimum="0" Maximum="1" Value="{Binding MeterR}" Height="4" MinHeight="4" />
+        <!-- MinWidth=0: the Fluent ProgressBar's default MinWidth would overflow the 120 px column onto the voice count -->
+        <ProgressBar Minimum="0" Maximum="1" Value="{Binding MeterL}" Height="4" MinHeight="4" MinWidth="0" />
+        <ProgressBar Minimum="0" Maximum="1" Value="{Binding MeterR}" Height="4" MinHeight="4" MinWidth="0" />
       </StackPanel>
     </Grid>
   </Grid>

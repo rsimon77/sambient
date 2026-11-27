@@ -30,6 +30,9 @@ public sealed partial class ParamKnobViewModel : ObservableObject
     [ObservableProperty] private double _value;
     [ObservableProperty] private string _displayText = "";
     [ObservableProperty] private bool _isLearning;
+    /// <summary>False greys the knob out and ignores the mouse (e.g. BALANCE on ATMOS1).</summary>
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(Opacity))] private bool _isEnabled = true;
+    public double Opacity => IsEnabled ? 1.0 : 0.35;
 
     public ParamKnobViewModel(string label, string midiTarget, double min, double max, double def, bool bipolar,
         Func<double, string> format, Action<double> apply, double? initial = null)

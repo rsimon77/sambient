@@ -40,6 +40,19 @@ public partial class MainWindow : Window
             piano.NoteOff += vm.StopNote;
         }
 
+        // Shift+click on "Release holds" releases the holds of every layer (the Click event carries no modifiers).
+        var release = this.FindControl<Button>("ReleaseHoldsButton");
+        if (release != null)
+        {
+            bool shift = false;
+            release.AddHandler(PointerPressedEvent, (_, e) => shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift), RoutingStrategies.Tunnel);
+            release.Click += (_, _) =>
+            {
+                if (shift) vm.ReleaseAllHolds(); else vm.ReleaseHoldsCommand.Execute(null);
+                shift = false;
+            };
+        }
+
         vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(MainViewModel.KeyboardVisible) && !vm.KeyboardVisible) ReleaseAllNotes();

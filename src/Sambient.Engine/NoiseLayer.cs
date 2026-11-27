@@ -14,7 +14,7 @@ namespace Sambient.Engine;
 /// (see <see cref="PlaybackRate"/>); white noise is not pitched.
 /// TODO(LN.IN milestone): line input as an alternative source instead of the sample.
 /// </summary>
-public sealed class NoiseLayer : ILayer
+public sealed class NoiseLayer : ILayer, IVoiceSink, IModulatedLayer
 {
     public const int VoiceCount = 8;
     public const int SubBlock = 32;
@@ -28,6 +28,9 @@ public sealed class NoiseLayer : ILayer
     private readonly NoiseVoice[] _voices = new NoiseVoice[VoiceCount];
     private readonly float[] _mixL = new float[SubBlock];
     private readonly float[] _mixR = new float[SubBlock];
+    private readonly LayerModulation _mod;
+    internal LayerModulation Mod => _mod;
+    LayerModulation IModulatedLayer.Mod => _mod;
 
     private SmoothedValue _balance, _cutoff, _reso, _level, _pan, _bend;
     private NoiseSample? _sample;
@@ -35,6 +38,7 @@ public sealed class NoiseLayer : ILayer
     private long _age;
     private bool _sustain;
     private float _bendTarget;
+    private readonly VoiceModeController _ctl;
     private SamplePlayMode _mode = SamplePlayMode.Loop;
 
     private FilterMode _filter;
@@ -42,11 +46,14 @@ public sealed class NoiseLayer : ILayer
 
     public int Index => _index;
     public int ActiveVoices { get; private set; }
+    internal NoiseVoice[] VoicesForTest => _voices;
     public NoiseSample? CurrentSample => _sample;
 
     public NoiseLayer(int index, float sampleRate, ParameterStore parameters, NoiseBank bank)
     {
         _index = index; _fs = sampleRate; _params = parameters; _bank = bank;
+        _ctl = new VoiceModeController(parameters, index, sampleRate, this, unisonSupported: false);
+        _mod = new LayerModulation(index, sampleRate, parameters);
         for (int i = 0; i < VoiceCount; i++) _voices[i] = new NoiseVoice(sampleRate, i);
         _balance = new SmoothedValue(parameters.Get(index, ParamId.Harmonic), sampleRate, 15f);
         _cutoff = new SmoothedValue(parameters.Get(index, ParamId.Cutoff), sampleRate, 15f);
@@ -69,21 +76,53 @@ public sealed class NoiseLayer : ILayer
         => PlaybackRate((double)sampleRate / outputRate, semitones);
 
     // ---------------------------------------------------------------- events
+    // Note logic (voice modes, HOLD, sustain bookkeeping for the single-voice modes) lives in VoiceModeController; the
+    // IVoiceSink methods below do the actual voice work.
 
     public void NoteOn(int note, int velocity)
     {
         if (velocity <= 0) velocity = (int)MathF.Round(_params.Get(_index, ParamId.Velocity));
+        _ctl.NoteOn(note, velocity);
+    }
+
+    public void NoteOff(int note) => _ctl.NoteOff(note);
+
+    /// <summary>HOLD: latch the key, or release it when it is already latched.</summary>
+    public void HoldToggle(int note, int velocity)
+    {
+        if (velocity <= 0) velocity = (int)MathF.Round(_params.Get(_index, ParamId.Velocity));
+        _ctl.HoldToggle(note, velocity);
+    }
+
+    /// <summary>Releases all latched (HOLD) keys of this layer.</summary>
+    public void ClearHolds() => _ctl.ClearHolds();
+
+    public void AllNotesOff() => _ctl.AllNotesOff();
+
+    /// <summary>Test/diagnostic: the note logic of this layer.</summary>
+    public VoiceModeController Modes => _ctl;
+
+    void IVoiceSink.ReleaseAll()
+    {
+        foreach (var v in _voices)
+            if (v.Active && (v.Gate || v.SustainDeferred)) v.Release();
+    }
+
+    void IVoiceSink.PolyOn(int note, int velocity)
+    {
         long age = ++_age;
 
-        NoiseVoice? v = null;
+        NoiseVoice v = null!;
+        bool found = false;
         foreach (var c in _voices)
-            if (c.Active && c.Note == note) { v = c; break; }
-        if (v != null) { v.Retrigger(velocity, age); return; }
+            if (c.Active && c.Note == note) { v = c; found = true; break; }
+        if (found) { Plain(v); v.Retrigger(velocity, age); return; }
 
         foreach (var c in _voices)
-            if (!c.Active) { v = c; break; }
-        if (v != null) { v.Start(_sample, note, velocity, age); return; }
+            if (!c.Active) { v = c; found = true; break; }
+        if (found) { Plain(v); v.Start(_sample, note, velocity, age); return; }
 
+        // steal: oldest releasing, else oldest held (never a voice that is already waiting for a steal if avoidable)
         NoiseVoice? best = null;
         foreach (var c in _voices)
             if (c.IsReleasing && (best == null || c.Age < best.Age)) best = c;
@@ -93,10 +132,14 @@ public sealed class NoiseLayer : ILayer
         if (best == null)
             foreach (var c in _voices)
                 if (best == null || c.Age < best.Age) best = c;
+        Plain(best!);
         best!.Steal(note, velocity, age);
     }
 
-    public void NoteOff(int note)
+    /// <summary>Clears unison / glide leftovers so a plain voice sounds normal.</summary>
+    private static void Plain(NoiseVoice v) { v.DetuneOffsetCents = 0f; v.PanSpread = 0f; v.GlideMs = 0f; }
+
+    void IVoiceSink.PolyOff(int note)
     {
         foreach (var v in _voices)
         {
@@ -106,15 +149,31 @@ public sealed class NoiseLayer : ILayer
         }
     }
 
-    public void AllNotesOff()
+    void IVoiceSink.MonoStart(int note, int velocity, float glideMs, bool retrigger)
     {
-        foreach (var v in _voices)
-            if (v.Active && (v.Gate || v.SustainDeferred)) v.Release();
+        var v = _voices[0];
+        long age = ++_age;
+        v.DetuneOffsetCents = 0f; v.PanSpread = 0f;
+        v.GlideMs = glideMs;
+        if (v.Active && !v.Pending)
+        {
+            v.SlideTo(note);                       // GlideMs 0 = instant
+            if (retrigger || !v.Gate) v.Retrigger(velocity, age);
+        }
+        else if (v.Active) { v.SlideTo(note); v.Retrigger(velocity, age); }
+        else v.Start(_sample, note, velocity, age);
+    }
+
+    void IVoiceSink.MonoStop()
+    {
+        var v = _voices[0];
+        if (v.Active && (v.Gate || v.SustainDeferred)) v.Release();
     }
 
     public void SetSustain(bool down)
     {
         _sustain = down;
+        _ctl.SetSustain(down);
         if (down) return;
         foreach (var v in _voices)
             if (v.Active && v.SustainDeferred) v.Release();
@@ -130,6 +189,7 @@ public sealed class NoiseLayer : ILayer
     private void UpdateParams()
     {
         int i = _index;
+        _mod.Update();
         int slot = Math.Clamp((int)MathF.Round(_params.Get(i, ParamId.Wave)), 1, NoiseBank.SlotCount);
         if (_bank.IsReady(slot))
         {
@@ -175,12 +235,15 @@ public sealed class NoiseLayer : ILayer
 
     public void Render(Span<float> interleavedStereo, int frames)
     {
+        _ctl.Sync();
         UpdateParams();
         int offset = 0;
         while (offset < frames)
         {
-            int n = Math.Min(SubBlock, frames - offset);
+            _ctl.ProcessArpEvents();
+            int n = Math.Min(Math.Min(SubBlock, frames - offset), Math.Max(1, _ctl.SamplesToNextArpEvent()));
             RenderSub(interleavedStereo, offset, n);
+            _ctl.AdvanceArp(n);
             offset += n;
         }
         int active = 0;
@@ -191,6 +254,7 @@ public sealed class NoiseLayer : ILayer
     private void RenderSub(Span<float> output, int offset, int n)
     {
         _balance.Skip(n); _cutoff.Skip(n); _reso.Skip(n); _level.Skip(n); _pan.Skip(n); _bend.Skip(n);
+        _mod.BeginSub(n);       // layer-level LFO clocks and send modulation
 
         bool any = false;
         foreach (var v in _voices) if (v.Active) { any = true; break; }
@@ -208,6 +272,11 @@ public sealed class NoiseLayer : ILayer
             CutoffHz = ParamCurves.CutoffHz(_cutoff.Current),
             Q = ParamCurves.ResonanceQ(_reso.Current),
             BandwidthOct = ParamCurves.BandpassOctaves(_reso.Current),
+            CutoffKnob = _cutoff.Current,
+            ResoKnob = _reso.Current,
+            Pan = _pan.Current,
+            BalanceKnob = _balance.Current,
+            Mod = _mod,
         };
 
         var mixL = _mixL.AsSpan(0, n);
@@ -217,13 +286,11 @@ public sealed class NoiseLayer : ILayer
             if (v.Active) v.Process(mixL, mixR, n, in block);
 
         float g = ParamCurves.LevelGain(_level.Current) * VoiceMixScale;
-        var (pl, pr) = ParamCurves.PanGains(_pan.Current);
-        float gl = g * pl, gr = g * pr;
-        int o = offset * 2;
+        int o = offset * 2;      // the voices already applied the pan law
         for (int i = 0; i < n; i++)
         {
-            output[o++] += mixL[i] * gl;
-            output[o++] += mixR[i] * gr;
+            output[o++] += mixL[i] * g;
+            output[o++] += mixR[i] * g;
         }
     }
 

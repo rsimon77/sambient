@@ -21,6 +21,19 @@ public static class MidiTargets
     /// <summary>Selected layer's send to the SHIMMER bus (new in M2).</summary>
     public const string ShimmerSend = "ShimmerSend";
 
+    // layer parameters added with STRUCTURE / MODULATION / VOICE MODE (selected layer; names equal the engine ParamId names)
+    public const string Pitch = "Pitch";
+    public const string Detune = "Detune";
+    public const string Balance = "Balance";
+    public const string ModRate = "ModRate";
+    public const string ModDepth = "ModDepth";
+    public const string Lfo1Rate = "Lfo1Rate";
+    public const string Lfo1Depth = "Lfo1Depth";
+    public const string Lfo2Rate = "Lfo2Rate";
+    public const string Lfo2Depth = "Lfo2Depth";
+    public const string Glide = "Glide";
+    public const string UnisonDetune = "UnisonDetune";
+
     // global parameters
     public const string MasterVolume = "MasterVolume";
     public const string ReverbMix = "ReverbMix";
@@ -28,7 +41,8 @@ public static class MidiTargets
     public const string FxAmount = "FxAmount";
 
     public static readonly IReadOnlyList<string> Layer =
-        [Harmonic, Cutoff, Resonance, Attack, Release, Level, Pan, Velocity, ReverbSend, ShimmerSend];
+        [Harmonic, Cutoff, Resonance, Attack, Release, Level, Pan, Velocity, ReverbSend, ShimmerSend,
+         Pitch, Detune, Balance, ModRate, ModDepth, Lfo1Rate, Lfo1Depth, Lfo2Rate, Lfo2Depth, Glide, UnisonDetune];
 
     public static readonly IReadOnlyList<string> Global = [MasterVolume, ReverbMix, FxSpeed, FxAmount];
 

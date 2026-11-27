@@ -3,6 +3,7 @@ using System.Globalization;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Sambient.App.Controls;
 using Sambient.App.Settings;
 using Sambient.Audio;
 using Sambient.Control;
@@ -40,6 +41,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>Editor knobs of the SELECTED layer (HARMONIC, CUTOFF, RESO, ATTACK, RELEASE, VELO).</summary>
     public ObservableCollection<ParamKnobViewModel> LayerKnobs { get; } = new();
     public ObservableCollection<LayerStripViewModel> Strips { get; } = new();
+    /// <summary>Every selected-layer knob (editor row, OSC, MOD, LFO, VOICE): reloaded from the store on layer switch.</summary>
+    private readonly List<ParamKnobViewModel> _selKnobs = new();
+    public ParamKnobViewModel PitchKnob { get; }
+    public ParamKnobViewModel DetuneKnob { get; }
+    public ParamKnobViewModel BalanceKnob { get; }
+    public ParamKnobViewModel ModRateKnob { get; }
+    public ParamKnobViewModel ModDepthKnob { get; }
+    public ParamKnobViewModel GlideKnob { get; }
+    public ParamKnobViewModel UnisonDetuneKnob { get; }
+    public ParamChoiceViewModel StructureChoice { get; }
+    public ParamChoiceViewModel ModShapeChoice { get; }
+    public ParamChoiceViewModel VoiceModeChoice { get; }
+    public ParamChoiceViewModel ArpTypeChoice { get; }
+    public ParamChoiceViewModel StepNoteChoice { get; }
+    public LfoPanelViewModel Lfo1 { get; }
+    public LfoPanelViewModel Lfo2 { get; }
+    /// <summary>UI mirror of the engine's HOLD latches (drawn on the on-screen keyboard).</summary>
+    public LatchedNoteSet Latched { get; } = new(ParameterStore.MaxLayers);
     public ParamKnobViewModel MasterKnob { get; }
     public ParamKnobViewModel ReverbMixKnob { get; }
     public ParamKnobViewModel FxSpeedKnob { get; }
@@ -94,6 +113,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private double _meterR;
     [ObservableProperty] private Wavetable? _previewTable;
     [ObservableProperty] private bool _previewBuilding = true;
+    [ObservableProperty] private bool _holdMode;
+    /// <summary>Structure of the selected layer (0..5), or -1 on the NOISE layer (no structure). Drives the Yin/Yang diagram.</summary>
+    [ObservableProperty] private int _structureIndex = -1;
+    [ObservableProperty] private string _modCaption = "";
+
+    // structure of the selected synth layer (0..5, see Sambient.Engine.Structure); the labels/formats below depend on it
+    private int _structure;
+    private bool IsAtmos1 => !IsNoiseLayer && _structure == (int)Structure.Atmos1;
+    private bool IsAtmos2 => !IsNoiseLayer && _structure == (int)Structure.Atmos2;
+    public bool IsSynthLayer => !IsNoiseLayer;
+
+    internal static readonly string[] StructureShortNames = ["DRN1", "DRN2", "PAD1", "PAD2", "ATM1", "ATM2"];
+    private static readonly string[] AssignNames =
+        ["OFF", "TUNE", "HARM", "BAL", "PTCH", "DT.FB", "L1.RT", "L1.DP", "MD.RT", "MD.DP", "FL.CO", "FL.RS", "PAN", "LVL", "\u2192SM", "\u2192RV", "O.LVL"];
+    private static readonly string[] TrigNames = ["OFF", "1", "2", "3", "4", "5", "6", "7", "8", "INF"];
+    private static readonly string[] VoiceModeNames = ["POLY", "MONO", "LGT", "UNI", "ARP"];
+    private static readonly string[] ArpTypeNames = ["UP", "DOWN", "U.D", "D.U", "U.A.D", "D.A.U", "RNDM", "UP+1", "UP+2", "DN\u22121", "DN\u22122", "P.O"];
+    private static readonly string[] StepNoteNames =
+        ["8/1", "4/1", "3/1", "2/1", "1/1", "1/2", "1/.4", "1/4", "1/.8", "1/2T", "1/8", "1/.16", "1/4T", "1/16", "1/32"];
+
+    public int VoiceModeValue => VoiceModeChoice.Selected?.Value ?? 0;
+    public bool IsGlideVisible => VoiceModeValue is (int)VoiceMode.Mono or (int)VoiceMode.Legato;
+    public bool IsUnisonVisible => VoiceModeValue == (int)VoiceMode.Unison;
+    public bool IsArpVisible => VoiceModeValue == (int)VoiceMode.Arp;
+    public bool IsVoiceAdjEmpty => !IsGlideVisible && !IsUnisonVisible && !IsArpVisible;
 
     public bool IsNoiseLayer => SelectedLayerIndex == ParameterStore.NoiseLayerIndex;
     public string LayerTitle => $"LAYER {SelectedLayerIndex + 1} · {DefaultPatch.LayerNames[SelectedLayerIndex]}";
@@ -140,6 +184,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
         AddKnob("ATTACK", ParamId.Attack, v => FormatMs(ParamCurves.AttackMs((float)v)));
         AddKnob("RELEASE", ParamId.Release, v => FormatMs(ParamCurves.ReleaseMs((float)v)));
         AddKnob("VELO", ParamId.Velocity, v => $"{v:0}");
+
+        // OSC / STRUCTURE
+        PitchKnob = AddSelKnob("PITCH", ParamId.Pitch, PitchText, bipolar: true);
+        DetuneKnob = AddSelKnob("DETUNE", ParamId.Detune, DetuneText, bipolar: true);
+        BalanceKnob = AddSelKnob("BALANCE", ParamId.Balance, BalanceText, bipolar: true);
+        ModRateKnob = AddSelKnob("MOD RATE", ParamId.ModRate, v => $"{v:0}");
+        ModDepthKnob = AddSelKnob("MOD DEPTH", ParamId.ModDepth, v => $"{v:0}");
+        StructureChoice = Choice("STRUCTURE", ParamId.Structure, StructureShortNames);
+        StructureChoice.UserChanged += OnStructureChosen;
+        ModShapeChoice = Choice("MOD SHAPE", ParamId.ModShape, LfoShapes.Names);
+
+        // LFO1 / LFO2
+        Lfo1 = CreateLfo(1, ParamId.Lfo1Shape, ParamId.Lfo1Assign, ParamId.Lfo1Trig, ParamId.Lfo1Rate, ParamId.Lfo1Depth);
+        Lfo2 = CreateLfo(2, ParamId.Lfo2Shape, ParamId.Lfo2Assign, ParamId.Lfo2Trig, ParamId.Lfo2Rate, ParamId.Lfo2Depth);
+
+        // VOICE
+        VoiceModeChoice = Choice("MODE", ParamId.VoiceMode, VoiceModeNames);
+        VoiceModeChoice.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(ParamChoiceViewModel.Selected)) RefreshVoiceUi(); };
+        GlideKnob = AddSelKnob("GLIDE", ParamId.Glide, v => FormatMs(ParamCurves.GlideMs((float)v)));
+        UnisonDetuneKnob = AddSelKnob("DETUNE", ParamId.UnisonDetune, v => $"{ParamCurves.UnisonDetuneCents((float)v):0.0} ct");
+        ArpTypeChoice = Choice("ARP TYPE", ParamId.ArpType, ArpTypeNames);
+        StepNoteChoice = Choice("NOTE", ParamId.StepNote, StepNoteNames);
 
         // mixer strips: LEVEL / PAN / ->REVERB / ->SHIMMER per layer
         for (int l = 0; l < ParameterStore.MaxLayers; l++)
@@ -204,13 +270,98 @@ public partial class MainViewModel : ObservableObject, IDisposable
         => _knobsByTarget.TryGetValue(target, out var k) ? k : Strips[SelIdx].FindKnob(target);
 
     private void AddKnob(string label, ParamId id, Func<double, string> format, bool bipolar = false)
+        => LayerKnobs.Add(AddSelKnob(label, id, format, bipolar));
+
+    /// <summary>A knob for a parameter of the SELECTED layer (registered for MIDI and for reload on layer switch, but not in the editor row).</summary>
+    private ParamKnobViewModel AddSelKnob(string label, ParamId id, Func<double, string> format, bool bipolar = false)
     {
         var info = ParamTable.Get(id);
         var k = new ParamKnobViewModel(label, id.ToString(), info.Min, info.Max, info.Default, bipolar, format,
             v => Engine.SetParam(SelIdx, id, (float)v), _params.Get(0, id));
         WireMidiCommands(k);
-        LayerKnobs.Add(k);
+        _selKnobs.Add(k);
         _knobsByTarget[k.MidiTarget] = k;
+        return k;
+    }
+
+    private ParamChoiceViewModel Choice(string label, ParamId id, IReadOnlyList<string> names)
+        => new(label, names.Select((n, i) => new ChoiceOption(i, n)), v => Engine.SetParam(SelIdx, id, v));
+
+    private LfoPanelViewModel CreateLfo(int n, ParamId shape, ParamId assign, ParamId trig, ParamId rate, ParamId depth)
+    {
+        var assignChoice = new ParamChoiceViewModel("ASSIGN", AssignOptions(n, false), v => Engine.SetParam(SelIdx, assign, v));
+        return new LfoPanelViewModel($"LFO {n}", Choice("SHAPE", shape, LfoShapes.Names), assignChoice,
+            Choice("TRIG", trig, TrigNames),
+            AddSelKnob("RATE", rate, v => $"{v:0}"), AddSelKnob("DEPTH", depth, v => $"{v:0}"));
+    }
+
+    /// <summary>LFO destinations: L1.RT / L1.DP only exist for LFO2, O.LVL only for LFO1, BAL is hidden on the NOISE layer.</summary>
+    private static IEnumerable<ChoiceOption> AssignOptions(int lfo, bool noise)
+        => Enumerable.Range(0, AssignNames.Length)
+            .Where(v => !(lfo == 1 && v is (int)LfoAssign.Lfo1Rate or (int)LfoAssign.Lfo1Depth)
+                        && !(lfo == 2 && v == (int)LfoAssign.OscLevel)
+                        && !(noise && v == (int)LfoAssign.Balance))
+            .Select(v => new ChoiceOption(v, AssignNames[v]));
+
+    // PITCH: 1/20 semitone units. ATMOS2 shows a modulator RATIO instead; ASSUMPTION (display only): the -240..240 range is
+    // mapped linearly onto 0.50..15.99 as the hardware's displayed range, the engine uses its own mapping.
+    private string PitchText(double v)
+    {
+        if (IsAtmos2) return "x" + (0.50 + (v + 240.0) / 480.0 * (15.99 - 0.50)).ToString("0.00", CultureInfo.InvariantCulture);
+        return (v / 20.0).ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture) + " st";
+    }
+
+    private string DetuneText(double v)
+    {
+        if (IsAtmos2) return $"{v:0}";                       // FEEDBK 0..127
+        int d = (int)Math.Clamp(Math.Round(v - 63.5, MidpointRounding.AwayFromZero), -63, 63);
+        return d == 0 ? "0" : d.ToString("+0;-0", CultureInfo.InvariantCulture);
+    }
+
+    private string BalanceText(double v)
+    {
+        if (!BalanceKnobEnabled) return "\u2014";
+        if (IsAtmos2) return $"{v:0}";                       // FM AMT 0..127
+        int d = (int)Math.Clamp(Math.Round(v - 63.5, MidpointRounding.AwayFromZero), -63, 63);
+        return d == 0 ? "CNTR" : d < 0 ? $"OSC1 {-d}" : $"OSC2 {d}";
+    }
+
+    private bool BalanceKnobEnabled => !IsNoiseLayer && !IsAtmos1;
+
+    private void OnStructureChosen(ChoiceOption o)
+    {
+        _structure = o.Value;
+        if (_structure is (int)Structure.Drone1 or (int)Structure.Drone2) Octave = -2;   // DRONE default (the engine sets it too)
+        RefreshStructureUi();
+    }
+
+    /// <summary>Labels, enabled state and captions that depend on the selected layer and its structure.</summary>
+    private void RefreshStructureUi()
+    {
+        bool noise = IsNoiseLayer;
+        StructureIndex = noise ? -1 : _structure;
+        PitchKnob.Label = IsAtmos2 ? "RATIO" : "PITCH";
+        DetuneKnob.Label = IsAtmos2 ? "FEEDBK" : "DETUNE";
+        BalanceKnob.Label = IsAtmos2 ? "FM AMT" : "BALANCE";
+        BalanceKnob.IsEnabled = BalanceKnobEnabled;
+        ModCaption = noise ? "MOD \u2192 PITCH" : (Structure)_structure switch
+        {
+            Structure.Drone1 => "MOD \u2192 DETUNE",
+            Structure.Atmos1 => "MOD \u2192 RING",
+            Structure.Atmos2 => "MOD \u2192 RATIO",
+            _ => "MOD \u2192 HARMONIC",
+        };
+        OnPropertyChanged(nameof(IsSynthLayer));
+        PitchKnob.RefreshDisplay(); DetuneKnob.RefreshDisplay(); BalanceKnob.RefreshDisplay();
+    }
+
+    private void RefreshVoiceUi()
+    {
+        OnPropertyChanged(nameof(VoiceModeValue));
+        OnPropertyChanged(nameof(IsGlideVisible));
+        OnPropertyChanged(nameof(IsUnisonVisible));
+        OnPropertyChanged(nameof(IsArpVisible));
+        OnPropertyChanged(nameof(IsVoiceAdjEmpty));
     }
 
     private void AddStripKnob(LayerStripViewModel strip, string label, ParamId id, Func<double, string> format, bool bipolar = false)
@@ -268,9 +419,39 @@ public partial class MainViewModel : ObservableObject, IDisposable
             SelectedFilter = Filters[(int)_params.Get(index, ParamId.FilterType)];
             Octave = (int)_params.Get(index, ParamId.Octave);
             SelectedPlayMode = PlayModes[(int)_params.Get(index, ParamId.NoisePlayMode) >= 1 ? 1 : 0];
-            foreach (var k in LayerKnobs) k.Load(_params.Get(index, Enum.Parse<ParamId>(k.MidiTarget)));
+            Latched.DisplayLayer = index;
+
+            // list parameters + knobs of the new layer (the structure must be known before the knob texts are formatted)
+            _structure = (int)_params.Get(index, ParamId.Structure);
+            StructureChoice.Load(_structure);
+            ModShapeChoice.Load((int)_params.Get(index, ParamId.ModShape));
+            LoadLfo(Lfo1, 1, index, ParamId.Lfo1Shape, ParamId.Lfo1Assign, ParamId.Lfo1Trig);
+            LoadLfo(Lfo2, 2, index, ParamId.Lfo2Shape, ParamId.Lfo2Assign, ParamId.Lfo2Trig);
+            VoiceModeChoice.Options[(int)VoiceMode.Unison].IsEnabled = !IsNoiseLayer;
+            int vmode = (int)_params.Get(index, ParamId.VoiceMode);
+            if (IsNoiseLayer && vmode == (int)VoiceMode.Unison)
+            {
+                vmode = (int)VoiceMode.Poly;                  // UNISON does not exist on the NOISE layer
+                Engine.SetParam(index, ParamId.VoiceMode, vmode);
+            }
+            VoiceModeChoice.Load(vmode);
+            ArpTypeChoice.Load((int)_params.Get(index, ParamId.ArpType));
+            StepNoteChoice.Load((int)_params.Get(index, ParamId.StepNote));
+            RefreshVoiceUi();
+            RefreshStructureUi();
+            foreach (var k in _selKnobs) k.Load(_params.Get(index, Enum.Parse<ParamId>(k.MidiTarget)));
         }
         finally { _loading = false; }
+    }
+
+    private void LoadLfo(LfoPanelViewModel lfo, int n, int layer, ParamId shape, ParamId assign, ParamId trig)
+    {
+        lfo.Shape.Load((int)_params.Get(layer, shape));
+        lfo.Assign.SetOptions(AssignOptions(n, IsNoiseLayer));
+        int stored = (int)_params.Get(layer, assign);
+        int shown = lfo.Assign.Load(stored);
+        if (shown != stored) Engine.SetParam(layer, assign, shown);     // destination not available on this layer: back to OFF
+        lfo.Trig.Load((int)_params.Get(layer, trig));
     }
 
     private void ApplyFxLabels()
@@ -374,6 +555,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>velocity 0 = use the layer's fixed VELO parameter. Goes to the selected layer.</summary>
     public void PlayNote(int note, int velocity)
     {
+        if (HoldMode) { HoldNote(note, velocity); return; }
         _router.NoteOn(NoteSource.Ui, note, velocity);
         Notes.NoteOn(note);
     }
@@ -384,6 +566,36 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _router.NoteOff(NoteSource.Ui, note);
         Notes.NoteOff(note);
     }
+
+    // ------------------------------------------------------------ HOLD (latched notes)
+
+    /// <summary>HOLD mode: a key press toggles a latched note on the selected layer instead of playing momentarily.</summary>
+    private void HoldNote(int note, int velocity)
+    {
+        int layer = SelIdx;
+        int vel = velocity > 0 ? velocity : (int)_params.Get(layer, ParamId.Velocity);
+        EngineHoldToggle(layer, note, vel);
+        Latched.Toggle(layer, note);
+    }
+
+    [RelayCommand]
+    private void ReleaseHolds()
+    {
+        EngineClearHolds(SelIdx);
+        Latched.Clear(SelIdx);
+    }
+
+    /// <summary>Shift+click on "Release holds": every layer.</summary>
+    public void ReleaseAllHolds()
+    {
+        EngineClearAllHolds();
+        Latched.ClearAll();
+    }
+
+    // Adapter to the engine's HOLD API (HoldToggle / ClearHolds / ClearAllHolds).
+    private void EngineHoldToggle(int layer, int note, int velocity) => Engine.HoldToggle(layer, note, velocity);
+    private void EngineClearHolds(int layer) => Engine.ClearHolds(layer);
+    private void EngineClearAllHolds() => Engine.ClearAllHolds();
 
     public void AllNotesOff()
     {
@@ -435,9 +647,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
         foreach (var st in Strips)
         {
             int w = (int)_params.Get(st.Index, ParamId.Wave);
-            st.WaveText = st.Index == ParameterStore.NoiseLayerIndex
-                ? NoiseBank.DefaultNames[Math.Clamp(w, 1, NoiseBank.SlotCount) - 1]
-                : WaveRecipes.TryGet(w, out var r) ? r.ShortName : $"W{w}";
+            if (st.Index == ParameterStore.NoiseLayerIndex)
+                st.WaveText = NoiseBank.DefaultNames[Math.Clamp(w, 1, NoiseBank.SlotCount) - 1];
+            else
+            {
+                string wave = WaveRecipes.TryGet(w, out var r) ? r.ShortName : $"W{w}";
+                int s = Math.Clamp((int)_params.Get(st.Index, ParamId.Structure), 0, StructureShortNames.Length - 1);
+                st.WaveText = $"{StructureShortNames[s]} \u00b7 {wave}";
+            }
+        }
+
+        // the engine may change the octave itself (DRONE structures): follow the store without writing back
+        int storeOctave = (int)_params.Get(SelIdx, ParamId.Octave);
+        if (storeOctave != Octave)
+        {
+            _loading = true;
+            try { Octave = storeOctave; }
+            finally { _loading = false; }
         }
 
         var e = Engine;

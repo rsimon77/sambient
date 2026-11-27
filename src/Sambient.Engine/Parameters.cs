@@ -33,6 +33,46 @@ public enum ParamId
     Mute,
     /// <summary>NOISE layer only: 0 = LOOP, 1 = SHOT (a <c>SamplePlayMode</c> value).</summary>
     NoisePlayMode,
+
+    // ---- BlendWave structure & oscillator (M3) ----
+    /// <summary>STRUCTURE, a <see cref="Structure"/> value (synth layers). DRONE structures default to octave -2 and allow 20 s release.</summary>
+    Structure,
+    /// <summary>PITCH -240..+240: pitch of the second/third OSC (units: 1/20 semitone = 5 cents, ±12 semitones). ATMOS2: modulator ratio 0.50..15.99 (mapped from the same range).</summary>
+    Pitch,
+    /// <summary>detune knob 0..127, center 63.5 = 0 (-63..+63 cents-ish fluctuation). ATMOS2: FM feedback 0..127.</summary>
+    Detune,
+    /// <summary>balance knob 0..127, center 63.5 (OSC balance). ATMOS2: FM amount 0..127. NOISE layer: unused (HARMONIC is its balance).</summary>
+    Balance,
+    /// <summary>MOD rate 0..127 (structure-specific MOD LFO, retriggered on note-on).</summary>
+    ModRate,
+    /// <summary>MOD depth 0..127.</summary>
+    ModDepth,
+    /// <summary>MOD shape, an <see cref="LfoShape"/> value.</summary>
+    ModShape,
+
+    // ---- LFO1 / LFO2 (M3) ----
+    Lfo1Shape,   // LfoShape
+    Lfo1Assign,  // LfoAssign
+    Lfo1Trig,    // 0 = OFF (free-running), 1..8 = cycles after note-on, 9 = INF (retrigger every note-on)
+    Lfo1Rate,    // 0..127
+    Lfo1Depth,   // 0..127
+    Lfo2Shape,
+    Lfo2Assign,
+    Lfo2Trig,
+    Lfo2Rate,
+    Lfo2Depth,
+
+    // ---- Voice mode (M3) ----
+    /// <summary>A <see cref="VoiceMode"/> value.</summary>
+    VoiceMode,
+    /// <summary>Glide 0..127 (0..10 s) for MONO / LEGATO.</summary>
+    Glide,
+    /// <summary>Unison detune 0..127 (0..20 cents) for UNISON.</summary>
+    UnisonDetune,
+    /// <summary>An <see cref="ArpType"/> value for ARP.</summary>
+    ArpType,
+    /// <summary>Step note length index (sequencer NOTE, also the arpeggiator speed), a <see cref="StepNote"/> value.</summary>
+    StepNote,
 }
 
 /// <summary>Global parameters.</summary>
@@ -85,6 +125,28 @@ public static class ParamTable
         new(0, 127, 0, false),      // ShimmerSend
         new(0, 1, 0, true),         // Mute
         new(0, 1, 0, true),         // NoisePlayMode
+        new(0, 5, 2, true),         // Structure (PAD1)
+        new(-240, 240, 0, true),    // Pitch
+        new(0, 127, 63.5f, false),  // Detune (center = 0)
+        new(0, 127, 63.5f, false),  // Balance (center)
+        new(0, 127, 40, false),     // ModRate
+        new(0, 127, 0, false),      // ModDepth
+        new(0, 23, 0, true),        // ModShape (SINE)
+        new(0, 23, 0, true),        // Lfo1Shape
+        new(0, 16, 0, true),        // Lfo1Assign (OFF)
+        new(0, 9, 0, true),         // Lfo1Trig (OFF)
+        new(0, 127, 40, false),     // Lfo1Rate
+        new(0, 127, 0, false),      // Lfo1Depth
+        new(0, 23, 0, true),        // Lfo2Shape
+        new(0, 16, 0, true),        // Lfo2Assign (OFF)
+        new(0, 9, 0, true),         // Lfo2Trig (OFF)
+        new(0, 127, 40, false),     // Lfo2Rate
+        new(0, 127, 0, false),      // Lfo2Depth
+        new(0, 4, 0, true),         // VoiceMode (POLY)
+        new(0, 127, 20, false),     // Glide
+        new(0, 127, 40, false),     // UnisonDetune
+        new(0, 11, 0, true),        // ArpType (UP)
+        new(0, 14, 13, true),       // StepNote (1/16)
     ];
 
     private static readonly ParamInfo[] Global =

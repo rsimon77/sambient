@@ -1,6 +1,6 @@
 namespace Sambient.Engine;
 
-public enum EngineEventType : byte { NoteOn, NoteOff, AllNotesOff, PitchBend, ModWheel, Sustain }
+public enum EngineEventType : byte { NoteOn, NoteOff, AllNotesOff, PitchBend, ModWheel, Sustain, HoldToggle, ClearHolds, ClearAllHolds }
 
 /// <summary>
 /// One event for the audio thread. NoteOn velocity 0 means "use the layer's fixed Velocity parameter".

@@ -83,3 +83,53 @@ public class MidiMapTests
         Assert.False(MidiTargets.IsLayerTarget("ReverbMix"));
     }
 }
+
+public class MidiTargetsTests
+{
+    private static readonly string[] NewTargets =
+        ["Pitch", "Detune", "Balance", "ModRate", "ModDepth", "Lfo1Rate", "Lfo1Depth", "Lfo2Rate", "Lfo2Depth", "Glide", "UnisonDetune"];
+
+    [Fact]
+    public void NewContinuousParams_AreSelectedLayerTargets()
+    {
+        foreach (var t in NewTargets) Assert.True(MidiTargets.IsLayerTarget(t), t);
+        Assert.Equal(MidiTargets.Layer.Count, MidiTargets.Layer.Distinct().Count());
+        Assert.False(MidiTargets.IsLayerTarget(MidiTargets.MasterVolume));
+        Assert.False(MidiTargets.IsLayerTarget("Structure"));   // list parameters are not CC targets
+    }
+
+    [Fact]
+    public void NewTargets_BindLearnAndRoundTripThroughJson()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "sambient-test-" + Guid.NewGuid().ToString("N"), "midimap.json");
+        var m = MidiMap.LoadOrCreate(path);
+        int cc = 40;
+        foreach (var t in NewTargets) m.Bind(MapSource.Any, null, cc++, t);
+        var learn = new MidiLearn(m);
+        learn.Arm(MidiTargets.Glide);
+        Assert.Equal("Glide", learn.TryCapture(new ControllerCc(ControllerSource.Daw, 0, 90, 1)));
+        m.Save(path);
+
+        var m2 = MidiMap.LoadOrCreate(path);
+        for (int i = 0; i < NewTargets.Length; i++)
+        {
+            if (NewTargets[i] == "Glide") continue;      // re-bound by the learn above
+            Assert.True(m2.TryResolve(ControllerSource.Keys, 0, 40 + i, out var got), NewTargets[i]);
+            Assert.Equal(NewTargets[i], got);
+        }
+        Assert.True(m2.TryResolve(ControllerSource.Daw, 0, 90, out var g));
+        Assert.Equal("Glide", g);
+    }
+
+    [Fact]
+    public void FileWithUnknownTarget_StillLoads()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "sambient-test-" + Guid.NewGuid().ToString("N"), "midimap.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "{ \"version\": 1, \"bindings\": [ { \"source\": \"Any\", \"channel\": null, \"cc\": 50, \"target\": \"FutureThing\" } ] }");
+        var m = MidiMap.LoadOrCreate(path);
+        Assert.True(m.TryResolve(ControllerSource.Keys, 0, 50, out var t));
+        Assert.Equal("FutureThing", t);
+        Assert.False(MidiTargets.IsLayerTarget(t));
+    }
+}

@@ -105,13 +105,39 @@ public struct WavetableOscillator
         }
     }
 
+    /// <summary>
+    /// Like <see cref="Next"/> but reads the table at (phase + <paramref name="phaseOffsetCycles"/>): phase modulation for FM
+    /// (the oscillator's own phase advance is unaffected).
+    /// </summary>
+    public float NextPm(float phaseOffsetCycles)
+    {
+        var wave = _wave;
+        if (wave == null) return 0f;
+        double rp = _phase + phaseOffsetCycles;
+        rp -= Math.Floor(rp);
+        if (rp >= 1.0) rp = 0.0;
+        float y = Read(wave, _levelHi, rp);
+        if (_wHi < 1f)
+        {
+            float lo = Read(wave, _levelLo, rp);
+            y = lo + (y - lo) * _wHi;
+        }
+        double p = _phase + _inc;
+        p -= Math.Floor(p);
+        _phase = p >= 1.0 ? 0.0 : p;
+        return y;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private readonly float Read(Wavetable wave, int level)
+    private readonly float Read(Wavetable wave, int level) => Read(wave, level, _phase);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private readonly float Read(Wavetable wave, int level, double phase)
     {
         float[] d = wave.LevelData(level);
         int len = Wavetable.TableLength(level);
         int stride = len + 3;
-        double x = _phase * len;
+        double x = phase * len;
         int i = (int)x;
         if (i >= len) i = len - 1;
         float t = (float)(x - i);

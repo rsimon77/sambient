@@ -1,6 +1,7 @@
 using Sambient.Dsp.Envelopes;
 using Sambient.Dsp.Filters;
 using Sambient.Dsp.Noise;
+using Sambient.Dsp.Params;
 
 namespace Sambient.Engine;
 
@@ -11,7 +12,11 @@ internal struct NoiseBlock
     public double SrcRatio;         // sample.SampleRate / output rate (1 when no sample)
     public float NoiseGain, SampleGain;
     public FilterMode Filter;
-    public float CutoffHz, Q, BandwidthOct;
+    public float CutoffHz, Q, BandwidthOct; // legacy (voices derive them from the knobs below so LFOs can modulate them)
+    public float CutoffKnob, ResoKnob;      // smoothed layer CUTOFF / RESO knob values 0..127
+    public float Pan;                       // smoothed layer PAN -63..63 (the voice applies the pan law, see PanSpread)
+    public float BalanceKnob;               // smoothed HARMONIC = noise (0) <-> sample (127) balance
+    public LayerModulation Mod;             // layer-wide MOD / LFO state
 }
 
 /// <summary>
@@ -45,9 +50,35 @@ internal sealed class NoiseVoice
 
     public bool IsReleasing => Active && !Gate && !Pending;
 
+    // ---- Voice-mode contract (used by the layer voice modes) ----
+    /// <summary>Glide time in ms for pitch moves made with <see cref="SlideTo"/> (0 = instant).</summary>
+    public float GlideMs;
+    /// <summary>Moves the sounding pitch to <paramref name="note"/> over <see cref="GlideMs"/> WITHOUT retriggering the
+    /// envelope or the LFOs (legato / mono glide). Exponential in the semitone domain: ~95 % of the interval after
+    /// <see cref="GlideMs"/> (time constant GlideMs/3). Audio thread only.</summary>
+    public void SlideTo(int note)
+    {
+        Note = note;
+        if (GlideMs <= 0.5f) _curNote = note;
+    }
+    /// <summary>Static pitch offset of this voice in cents (unison detune spread).</summary>
+    public float DetuneOffsetCents;
+    /// <summary>Static stereo spread offset -1..1 for this voice (unison width), added to the layer pan.</summary>
+    public float PanSpread;
+
+    /// <summary>Test hook: the sounding pitch (fractional MIDI note).</summary>
+    internal float SoundingNote => _curNote;
+
+    private readonly VoiceModulator _vm;
+    private float _curNote;
+    private float _ng, _sg;
+    private float _pl, _pr;
+    private bool _init, _notify;
+
     public NoiseVoice(float sampleRate, int seed)
     {
         _fs = sampleRate;
+        _vm = new VoiceModulator(sampleRate, (uint)(seed + 1) * 104729u + 7u);
         _filterL = new StateVariableFilter(sampleRate);
         _filterR = new StateVariableFilter(sampleRate);
         _env = new ArEnvelope(sampleRate);
@@ -78,6 +109,7 @@ internal sealed class NoiseVoice
         Active = true; Gate = true; SustainDeferred = false; Pending = false;
         _velGain = SynthVoice.VelocityGain(velocity);
         _filterL.Reset(); _filterR.Reset();
+        _curNote = note; _init = false; _vm.Retrigger(); _notify = true;
         _env.SetTimes(_attackMs, _releaseMs);
         _env.NoteOn();
     }
@@ -88,6 +120,7 @@ internal sealed class NoiseVoice
         Gate = true; SustainDeferred = false;
         if (Pending) { PendingVelocity = velocity; return; }
         _velGain = SynthVoice.VelocityGain(velocity);
+        _vm.Retrigger(); _notify = true;
         _env.SetTimes(_attackMs, _releaseMs);
         _env.NoteOn();
     }
@@ -136,7 +169,7 @@ internal sealed class NoiseVoice
         return (int)x * (1f / 2147483648f);
     }
 
-    /// <summary>Adds this voice's stereo output for <paramref name="n"/> samples into the two mix buffers.</summary>
+    /// <summary>Adds this voice's stereo output (after per-voice pan) for <paramref name="n"/> samples into the two mix buffers.</summary>
     public void Process(Span<float> mixL, Span<float> mixR, int n, in NoiseBlock b)
     {
         if (Pending && !_env.IsActive)
@@ -149,6 +182,7 @@ internal sealed class NoiseVoice
             _xfade = 0;
             _velGain = SynthVoice.VelocityGain(vel);
             _filterL.Reset(); _filterR.Reset();
+            _curNote = Note; _init = false; _vm.Retrigger(); _notify = true;
             _env.SetTimes(_attackMs, _releaseMs);
             _env.NoteOn();
         }
@@ -158,42 +192,99 @@ internal sealed class NoiseVoice
             return;
         }
 
-        // root key C4 plays the sample at its original pitch
-        double rate = NoiseLayer.PlaybackRate(b.SrcRatio, Note - NoiseLayer.RootNote + b.PitchSemis);
-        _player.SetRate(rate);
-        if (_xfade > 0) _playerOld.SetRate(rate);
-        _filterL.Mode = _filterR.Mode = b.Filter;
-        if (b.Filter == FilterMode.BandPass)
+        int done = 0;
+        while (done < n)
         {
-            _filterL.SetBandwidthOctaves(b.CutoffHz, b.BandwidthOct);
-            _filterR.SetBandwidthOctaves(b.CutoffHz, b.BandwidthOct);
+            int c = Math.Min(VoiceModulator.Cap, n - done);
+            ProcessChunk(mixL.Slice(done, c), mixR.Slice(done, c), c, done, in b);
+            done += c;
         }
-        else if (b.Filter != FilterMode.Off)
+        if (!_env.IsActive && !Pending) Active = false;
+    }
+
+    private void ProcessChunk(Span<float> mixL, Span<float> mixR, int n, int offset, in NoiseBlock b)
+    {
+        bool legacy = b.Mod == null;     // LEGACY: layer applies pan / balance / cutoff itself (remove after layer migration)
+        var m = b.Mod ?? LayerModulation.Neutral;
+        var vm = _vm;
+        if (_notify) { _notify = false; m.NoteStarted(); }
+        vm.Prepare(m, n, offset);
+        int mid = n >> 1;
+
+        if (_curNote != Note)
         {
-            _filterL.SetParameters(b.CutoffHz, b.Q);
-            _filterR.SetParameters(b.CutoffHz, b.Q);
+            if (GlideMs <= 0.5f) _curNote = Note;
+            else
+            {
+                float k = 1f - MathF.Exp(-3f * n / (GlideMs * 0.001f * _fs));
+                _curNote += (Note - _curNote) * k;
+                if (MathF.Abs(Note - _curNote) < 0.002f) _curNote = Note;
+            }
         }
 
-        float ng = b.NoiseGain * WhiteGain, sg = b.SampleGain, gain = _velGain;
+        // pitch: note - root + octave/bend + PITCH + detune + unison offset + TUNE LFO + MOD (+-1 semitone at depth 127, depth^2)
+        float semisP = ParamCurves.PitchSemitones(m.PitchUnits + vm.Pitch);
+        float det = ParamCurves.DetuneCents(Math.Clamp(m.DetuneKnob + vm.DtFb, 0f, 127f)) * 0.01f;
+        float modSemis = vm.ModD > 0f ? vm.ModD * vm.ModD * vm.Mod[mid] : 0f;
+        float semis = _curNote - NoiseLayer.RootNote + b.PitchSemis + semisP + det + DetuneOffsetCents * 0.01f + vm.Tune + modSemis;
+        double rate = NoiseLayer.PlaybackRate(b.SrcRatio, semis);
+        _player.SetRate(rate);
+        if (_xfade > 0) _playerOld.SetRate(rate);
+
+        _filterL.Mode = _filterR.Mode = b.Filter;
+        if (b.Filter != FilterMode.Off)
+        {
+            float ck = Math.Clamp(b.CutoffKnob + vm.Cutoff, 0f, 127f), rk = Math.Clamp(b.ResoKnob + vm.Reso, 0f, 127f);
+            float cHz = legacy ? b.CutoffHz : ParamCurves.CutoffHz(ck);
+            if (b.Filter == FilterMode.BandPass)
+            {
+                float bw = legacy ? b.BandwidthOct : ParamCurves.BandpassOctaves(rk);
+                _filterL.SetBandwidthOctaves(cHz, bw);
+                _filterR.SetBandwidthOctaves(cHz, bw);
+            }
+            else
+            {
+                float q = legacy ? b.Q : ParamCurves.ResonanceQ(rk);
+                _filterL.SetParameters(cHz, q);
+                _filterR.SetParameters(cHz, q);
+            }
+        }
+
+        // HARMONIC = noise <-> sample balance (LFO HARMONIC adds frames = knob units), gains ramped over the chunk
+        float bal = Math.Clamp(b.BalanceKnob + (vm.HasHarm ? vm.Harm[mid] : 0f), 0f, 127f);
+        float t = bal * (1f / 127f) * (MathF.PI * 0.5f);
+        float tng = MathF.Cos(t) * WhiteGain, tsg = MathF.Sin(t);
+        if (legacy) { tng = b.NoiseGain * WhiteGain; tsg = b.SampleGain; }
+        float panKnob = Math.Clamp(b.Pan + PanSpread * 63f + vm.Pan, -63f, 63f);
+        var (tpl, tpr) = legacy ? (1f, 1f) : ParamCurves.PanGains(panKnob);
+        if (!_init) { _ng = tng; _sg = tsg; _pl = tpl; _pr = tpr; _init = true; }
+        float ngs = (tng - _ng) / n, sgs = (tsg - _sg) / n, pls = (tpl - _pl) / n, prs = (tpr - _pr) / n;
+
+        float gain = _velGain;
+        bool hasOsc = vm.HasOscLvl, hasLvl = vm.HasLvl;
+        float ng = _ng, sg = _sg, pl = _pl, pr = _pr;
         for (int i = 0; i < n; i++)
         {
             _player.Next(out float sl, out float sr);
             if (_xfade > 0)
             {
                 _playerOld.Next(out float ol, out float orr);
-                float t = (float)_xfade / SampleFadeSamples;    // 1 -> 0
-                sl += (ol - sl) * t;
-                sr += (orr - sr) * t;
+                float xt = (float)_xfade / SampleFadeSamples;    // 1 -> 0
+                sl += (ol - sl) * xt;
+                sr += (orr - sr) * xt;
                 _xfade--;
             }
             float l = sl * sg + White(ref _rngL) * ng;
             float r = sr * sg + White(ref _rngR) * ng;
+            if (hasOsc) { float og = vm.OscLvl[i]; l *= og; r *= og; }
             l = _filterL.Process(l);
             r = _filterR.Process(r);
             float e = _env.Next() * gain;
-            mixL[i] += l * e;
-            mixR[i] += r * e;
+            if (hasLvl) e *= vm.Lvl[i];
+            mixL[i] += l * e * pl;
+            mixR[i] += r * e * pr;
+            ng += ngs; sg += sgs; pl += pls; pr += prs;
         }
-        if (!_env.IsActive && !Pending) Active = false;
+        _ng = tng; _sg = tsg; _pl = tpl; _pr = tpr;
     }
 }

@@ -8,6 +8,10 @@ public interface ILayer
     void NoteOn(int note, int velocity);
     void NoteOff(int note);
     void AllNotesOff();
+    /// <summary>HOLD: latch the key, or release it if already latched.</summary>
+    void HoldToggle(int note, int velocity);
+    /// <summary>Releases all HOLD-latched keys of the layer.</summary>
+    void ClearHolds();
     void SetSustain(bool down);
     void SetPitchBend(float value);
     void SetModWheel(float value);
