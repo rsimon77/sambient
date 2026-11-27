@@ -1,0 +1,51 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Sambient.App.ViewModels"
+        xmlns:audio="using:Sambient.Audio"
+        x:Class="Sambient.App.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Title="Sambient" Width="560" Height="520" MinWidth="420">
+  <StackPanel Margin="20" Spacing="14">
+    <TextBlock Text="Audio output" FontWeight="SemiBold" />
+    <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}" HorizontalAlignment="Stretch">
+      <ComboBox.ItemTemplate>
+        <DataTemplate x:DataType="audio:AudioDeviceInfo">
+          <TextBlock Text="{Binding Name}" />
+        </DataTemplate>
+      </ComboBox.ItemTemplate>
+    </ComboBox>
+    <TextBlock Text="{Binding Status}" Opacity="0.7" TextWrapping="Wrap" />
+
+    <Separator />
+
+    <ToggleButton Content="Test tone" IsChecked="{Binding ToneEnabled}" HorizontalAlignment="Left" />
+
+    <StackPanel Spacing="2">
+      <TextBlock>
+        <Run Text="Frequency: " />
+        <Run Text="{Binding FrequencyHz, StringFormat={}{0:0.0} Hz}" />
+      </TextBlock>
+      <!-- Slider value is log2(Hz): 55 Hz = 5.78, 880 Hz = 9.78 (4 octaves, logarithmic feel) -->
+      <Slider Minimum="5.7814" Maximum="9.7814" Value="{Binding FrequencyLog2}" />
+    </StackPanel>
+
+    <StackPanel Spacing="2">
+      <TextBlock>
+        <Run Text="Gain: " />
+        <Run Text="{Binding GainDb, StringFormat={}{0:0.0} dB}" />
+      </TextBlock>
+      <Slider Minimum="-60" Maximum="0" Value="{Binding GainDb}" />
+    </StackPanel>
+
+    <Separator />
+
+    <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="6" Padding="12">
+      <StackPanel Spacing="6">
+        <TextBlock Text="MIDI / Launchkey" FontWeight="SemiBold" />
+        <TextBlock Text="{Binding LaunchkeyStatus}" />
+        <TextBlock Text="{Binding LastMidiEvent}" Opacity="0.7" />
+        <ItemsControl ItemsSource="{Binding MidiPorts}" />
+      </StackPanel>
+    </Border>
+  </StackPanel>
+</Window>

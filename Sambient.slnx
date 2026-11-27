@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Sambient.App/Sambient.App.csproj" />
+    <Project Path="src/Sambient.Audio/Sambient.Audio.csproj" />
+    <Project Path="src/Sambient.Control/Sambient.Control.csproj" />
+    <Project Path="src/Sambient.Dsp/Sambient.Dsp.csproj" />
+    <Project Path="src/Sambient.Engine/Sambient.Engine.csproj" />
+    <Project Path="src/Sambient.Seq/Sambient.Seq.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Sambient.Tests/Sambient.Tests.csproj" />
+    <Project Path="tests/Sambient.Control.Tests/Sambient.Control.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Sambient.MidiProbe/Sambient.MidiProbe.csproj" />
+  </Folder>
+</Solution>

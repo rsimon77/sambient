@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Sambient.Engine\Sambient.Engine.csproj" />
+  </ItemGroup>
+</Project>
