@@ -23,7 +23,7 @@ public sealed class WavetableBank
         int r = Resolve(index);
         lock (_lock)
         {
-            return _tasks[r] ??= Task.Run(() =>
+            return _tasks[r] ??= BackgroundBuilder.Run(() =>
             {
                 WaveRecipes.TryGet(r, out var recipe);
                 var table = WavetableBuilder.Build(recipe);

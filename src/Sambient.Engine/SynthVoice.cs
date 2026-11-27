@@ -60,6 +60,8 @@ internal sealed class SynthVoice
     private readonly VoiceModulator _vm;
     private Wavetable? _table;
     private float _velGain;
+    private float _vcur;                        // velocity gain actually applied: follows _velGain with a 2 ms one-pole on a re-trigger (no step)
+    private readonly float _vk;
     private int _xfade, _xfadeTotal;
     private float _attackMs, _releaseMs;
 
@@ -79,9 +81,14 @@ internal sealed class SynthVoice
     internal Tuning? Tuning;
     private float Tuned(int note) => Tuning is null ? note : Tuning.MidiFor(note);
     private float _curNote;                     // sounding pitch in MIDI notes (glides towards Note)
+    // TEMPERAMENT / TUNING KEY / MASTER TUNE changes move the tuned pitch of the sounding note instantly; _slew carries the old
+    // pitch over and decays in a few ms so the oscillator glides to the new tuning instead of stepping
+    private float _slew, _slewTgt;
+    private int _slewNote = -1;
     private float _pl, _pr;
     private bool _panInit;
     private bool _notify;                       // tell the layer clocks about this note start
+    private bool _filterLatch;                  // next chunk adopts the layer's filter type without a crossfade
 
     public int Note = -1;
     /// <summary>Voice is allocated (sounding, releasing or waiting for its steal fade to end).</summary>
@@ -127,6 +134,18 @@ internal sealed class SynthVoice
         _env = new ArEnvelope(sampleRate);
         _vm = new VoiceModulator(sampleRate, (uint)(seed + 1) * 7919u);
         _sgStep = (float)(1.0 / (StructFadeSeconds * sampleRate));
+        _vk = 1f - MathF.Exp(-1f / (0.002f * sampleRate));
+    }
+
+    private void TuningSlew(float tgt, int n)
+    {
+        if (Note == _slewNote && GlideMs <= 0.5f && tgt != _slewTgt) _slew += _slewTgt - tgt;
+        _slewNote = Note; _slewTgt = tgt;
+        if (_slew != 0f)
+        {
+            _slew *= MathF.Exp(-n / (0.003f * _fs));
+            if (MathF.Abs(_slew) < 1e-4f) _slew = 0f;
+        }
     }
 
     public void SetTimes(float attackMs, float releaseMs)
@@ -146,13 +165,14 @@ internal sealed class SynthVoice
     {
         for (int k = 0; k < MaxOsc; k++) _osc[k].SetWave(_table!);
         _xfade = 0;
-        _curNote = Tuned(Note);
+        _curNote = Tuned(Note); _slew = 0f; _slewNote = -1;
+        _vcur = _velGain;
         _structLatch = true; _fade = 0; _sg = 1f;
         _gInit = false; _panInit = false;
         _mPhase = 0; _fb1 = _fb2 = 0f;
         _vm.Retrigger();
         _notify = true;
-        _filter.Reset();
+        _filter.Reset(); _filterLatch = true;
         _env.SetTimes(_attackMs, _releaseMs);
         _env.NoteOn();
     }
@@ -302,7 +322,8 @@ internal sealed class SynthVoice
             }
         }
         int mid = n >> 1;
-        float baseS = _curNote + b.PitchSemis + DetuneOffsetCents * 0.01f + vm.Tune;
+        TuningSlew(tgt, n);
+        float baseS = _curNote + _slew + b.PitchSemis + DetuneOffsetCents * 0.01f + vm.Tune;
         float pitchUnits = m.PitchUnits + vm.Pitch;
         float semisP = ParamCurves.PitchSemitones(pitchUnits);
         float detKnob = Math.Clamp(m.DetuneKnob + vm.DtFb, 0f, 127f);
@@ -311,7 +332,8 @@ internal sealed class SynthVoice
         float modMid = vm.ModD > 0f ? vm.Mod[mid] : 0f;
 
         // ---- filter
-        _filter.Mode = b.Filter;
+        if (_filterLatch) { _filterLatch = false; _filter.SetModeImmediate(b.Filter); }
+        else _filter.Mode = b.Filter;
         if (b.Filter != FilterMode.Off)
         {
             float ck = Math.Clamp(b.CutoffKnob + vm.Cutoff, 0f, 127f), rk = Math.Clamp(b.ResoKnob + vm.Reso, 0f, 127f);
@@ -473,7 +495,8 @@ internal sealed class SynthVoice
         }
         if (hasOsc) s *= vm.OscLvl[i];
         s = _filter.Process(s);
-        float o = s * _env.Next() * envGain;
+        _vcur += (_velGain - _vcur) * _vk;
+        float o = s * _env.Next() * _vcur;
         if (hasLvl) o *= vm.Lvl[i];
         mixL[i] += o * _pl;
         mixR[i] += o * _pr;

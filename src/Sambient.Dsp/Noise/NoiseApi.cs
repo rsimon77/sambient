@@ -35,7 +35,7 @@ public sealed class NoiseBank
         if (!Valid(slot)) return Task.CompletedTask;
         lock (_lock)
         {
-            return _tasks[slot] ??= Task.Run(() =>
+            return _tasks[slot] ??= BackgroundBuilder.Run(() =>
             {
                 var s = NoiseTextures.Generate(slot);
                 // A user sample set while building wins.

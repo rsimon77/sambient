@@ -52,6 +52,7 @@ public sealed class MasterFx
             f.SetSpeed(_speed / 127f);
             f.SetAmount(_amount / 127f);
             f.Reset();
+            f.StartFadeIn();
         }
         _fadeLeft = _fadeTotal;
     }

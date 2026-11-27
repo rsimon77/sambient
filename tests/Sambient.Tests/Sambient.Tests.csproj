@@ -19,6 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- the click-audit harness is shared with the WaveDump tool (click-audit option) -->
+    <Compile Include="..\..\tools\Sambient.WaveDump\ClickAudit.cs" Link="ClickAudit.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Sambient.Dsp\Sambient.Dsp.csproj" />
     <ProjectReference Include="..\..\src\Sambient.Engine\Sambient.Engine.csproj" />
     <ProjectReference Include="..\..\src\Sambient.Audio\Sambient.Audio.csproj" />

@@ -36,6 +36,8 @@ internal sealed class NoiseVoice
     private NoiseSample? _sample;
     private SamplePlayMode _mode;
     private float _velGain;
+    private float _vcur;                        // velocity gain applied: follows _velGain with a 2 ms one-pole on a re-trigger
+    private readonly float _vk;
     private int _xfade;
     private float _attackMs, _releaseMs;
     private uint _rngL, _rngR;
@@ -74,19 +76,36 @@ internal sealed class NoiseVoice
     internal Tuning? Tuning;
     private float Tuned(int note) => Tuning is null ? note : Tuning.MidiFor(note);
     private float _curNote;
+    // TEMPERAMENT / TUNING KEY / MASTER TUNE changes move the tuned pitch of the sounding note instantly; _slew carries the old
+    // pitch over and decays in a few ms so the oscillator glides to the new tuning instead of stepping
+    private float _slew, _slewTgt;
+    private int _slewNote = -1;
     private float _ng, _sg;
     private float _pl, _pr;
     private bool _init, _notify;
+    private bool _filterLatch;                  // next chunk adopts the layer's filter type without a crossfade
 
     public NoiseVoice(float sampleRate, int seed)
     {
         _fs = sampleRate;
+        _vk = 1f - MathF.Exp(-1f / (0.002f * sampleRate));
         _vm = new VoiceModulator(sampleRate, (uint)(seed + 1) * 104729u + 7u);
         _filterL = new StateVariableFilter(sampleRate);
         _filterR = new StateVariableFilter(sampleRate);
         _env = new ArEnvelope(sampleRate);
         _rngL = 0x9E3779B9u * (uint)(seed * 2 + 1) | 1u;
         _rngR = 0x85EBCA6Bu * (uint)(seed * 2 + 2) | 1u;
+    }
+
+    private void TuningSlew(float tgt, int n)
+    {
+        if (Note == _slewNote && GlideMs <= 0.5f && tgt != _slewTgt) _slew += _slewTgt - tgt;
+        _slewNote = Note; _slewTgt = tgt;
+        if (_slew != 0f)
+        {
+            _slew *= MathF.Exp(-n / (0.003f * _fs));
+            if (MathF.Abs(_slew) < 1e-4f) _slew = 0f;
+        }
     }
 
     public void SetTimes(float attackMs, float releaseMs)
@@ -110,9 +129,9 @@ internal sealed class NoiseVoice
         _xfade = 0;
         Note = note; Age = age;
         Active = true; Gate = true; SustainDeferred = false; Pending = false;
-        _velGain = SynthVoice.VelocityGain(velocity);
-        _filterL.Reset(); _filterR.Reset();
-        _curNote = Tuned(note); _init = false; _vm.Retrigger(); _notify = true;
+        _velGain = SynthVoice.VelocityGain(velocity); _vcur = _velGain;
+        _filterL.Reset(); _filterR.Reset(); _filterLatch = true;
+        _curNote = Tuned(note); _slew = 0f; _slewNote = -1; _init = false; _vm.Retrigger(); _notify = true;
         _env.SetTimes(_attackMs, _releaseMs);
         _env.NoteOn();
     }
@@ -183,9 +202,9 @@ internal sealed class NoiseVoice
             _player.SetMode(_mode);
             _player.Start();
             _xfade = 0;
-            _velGain = SynthVoice.VelocityGain(vel);
-            _filterL.Reset(); _filterR.Reset();
-            _curNote = Tuned(Note); _init = false; _vm.Retrigger(); _notify = true;
+            _velGain = SynthVoice.VelocityGain(vel); _vcur = _velGain;
+            _filterL.Reset(); _filterR.Reset(); _filterLatch = true;
+            _curNote = Tuned(Note); _slew = 0f; _slewNote = -1; _init = false; _vm.Retrigger(); _notify = true;
             _env.SetTimes(_attackMs, _releaseMs);
             _env.NoteOn();
         }
@@ -230,12 +249,14 @@ internal sealed class NoiseVoice
         float semisP = ParamCurves.PitchSemitones(m.PitchUnits + vm.Pitch);
         float det = ParamCurves.DetuneCents(Math.Clamp(m.DetuneKnob + vm.DtFb, 0f, 127f)) * 0.01f;
         float modSemis = vm.ModD > 0f ? vm.ModD * vm.ModD * vm.Mod[mid] : 0f;
-        float semis = _curNote - NoiseLayer.RootNote + b.PitchSemis + semisP + det + DetuneOffsetCents * 0.01f + vm.Tune + modSemis;
+        TuningSlew(tgt, n);
+        float semis = _curNote + _slew - NoiseLayer.RootNote + b.PitchSemis + semisP + det + DetuneOffsetCents * 0.01f + vm.Tune + modSemis;
         double rate = NoiseLayer.PlaybackRate(b.SrcRatio, semis);
         _player.SetRate(rate);
         if (_xfade > 0) _playerOld.SetRate(rate);
 
-        _filterL.Mode = _filterR.Mode = b.Filter;
+        if (_filterLatch) { _filterLatch = false; _filterL.SetModeImmediate(b.Filter); _filterR.SetModeImmediate(b.Filter); }
+        else { _filterL.Mode = b.Filter; _filterR.Mode = b.Filter; }
         if (b.Filter != FilterMode.Off)
         {
             float ck = Math.Clamp(b.CutoffKnob + vm.Cutoff, 0f, 127f), rk = Math.Clamp(b.ResoKnob + vm.Reso, 0f, 127f);
@@ -264,7 +285,7 @@ internal sealed class NoiseVoice
         if (!_init) { _ng = tng; _sg = tsg; _pl = tpl; _pr = tpr; _init = true; }
         float ngs = (tng - _ng) / n, sgs = (tsg - _sg) / n, pls = (tpl - _pl) / n, prs = (tpr - _pr) / n;
 
-        float gain = _velGain;
+        float vcur = _vcur;
         bool hasOsc = vm.HasOscLvl, hasLvl = vm.HasLvl;
         float ng = _ng, sg = _sg, pl = _pl, pr = _pr;
         for (int i = 0; i < n; i++)
@@ -283,12 +304,13 @@ internal sealed class NoiseVoice
             if (hasOsc) { float og = vm.OscLvl[i]; l *= og; r *= og; }
             l = _filterL.Process(l);
             r = _filterR.Process(r);
-            float e = _env.Next() * gain;
+            vcur += (_velGain - vcur) * _vk;
+            float e = _env.Next() * vcur;
             if (hasLvl) e *= vm.Lvl[i];
             mixL[i] += l * e * pl;
             mixR[i] += r * e * pr;
             ng += ngs; sg += sgs; pl += pls; pr += prs;
         }
-        _ng = tng; _sg = tsg; _pl = tpl; _pr = tpr;
+        _ng = tng; _sg = tsg; _pl = tpl; _pr = tpr; _vcur = vcur;
     }
 }

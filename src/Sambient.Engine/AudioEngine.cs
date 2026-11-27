@@ -52,6 +52,14 @@ public sealed class AudioEngine : IAudioCallback, ISequencerHost
     private int _lastReverbType = -1, _lastFxType = -1;
     private float _lastReverbMix = float.NaN, _lastFxSpeed = float.NaN, _lastFxAmount = float.NaN, _lastBpm = float.NaN;
 
+    // FX routing switch: the master is ducked (~8 ms down, switch at a chunk boundary, ~8 ms up) so the reordering of
+    // pattern level / master FX never steps the output
+    private bool _fxPre, _routeWanted;
+    private int _duckDir;                 // 0 none, -1 fading out, +1 fading in
+    private float _duck = 1f;
+    private readonly float _duckStep;
+    private const int DuckChunk = 128;
+
     private IEngineSequencer? _seq;
 
     private float _peakL, _peakR;                 // audio thread running peaks (with decay)
@@ -84,6 +92,8 @@ public sealed class AudioEngine : IAudioCallback, ISequencerHost
 
         _reverb = new ShimmerReverb(sampleRate);
         _fx = new MasterFx(sampleRate);
+        _fxPre = _routeWanted = Parameters.Get(GlobalParamId.FxRouting) >= 0.5f;
+        _duckStep = 1f / Math.Max(1f, 0.008f * sampleRate);
         _master = new SmoothedValue(Parameters.Get(GlobalParamId.MasterVolume), sampleRate, 20f);
         _patternLevel = new SmoothedValue(Parameters.Get(GlobalParamId.PatternLevel), sampleRate, 20f);
         for (int i = 0; i < LayerCount; i++)
@@ -171,7 +181,7 @@ public sealed class AudioEngine : IAudioCallback, ISequencerHost
         foreach (var l in _layers) l.AllNotesOff();
     }
 
-    void ISequencerHost.ResetReverb() => _reverb.Reset();
+    void ISequencerHost.ResetReverb() => _reverb.SoftReset();
 
     // ------------------------------------------------------------- UI snapshot (lock-free)
 
@@ -203,6 +213,7 @@ public sealed class AudioEngine : IAudioCallback, ISequencerHost
                 n = Math.Min(n, Math.Max(1, seq.SamplesToNextEvent));
             }
             ApplyGlobals();
+            if (_duckDir != 0) n = Math.Min(n, DuckChunk);    // route switch in progress: short chunks so it can happen at a boundary
             var chunk = buf.Slice(done * 2, n * 2);
             RenderChunk(chunk, n, ref pl, ref pr);
             if (seq != null)
@@ -249,6 +260,8 @@ public sealed class AudioEngine : IAudioCallback, ISequencerHost
         float bpm = Parameters.Get(GlobalParamId.Bpm);
         if (bpm != _lastBpm) { _lastBpm = bpm; _fx.SetTempo(bpm); }
 
+        _routeWanted = Parameters.Get(GlobalParamId.FxRouting) >= 0.5f;
+        if (_routeWanted != _fxPre && _duckDir == 0) _duckDir = -1;
         _master.SetTarget(Parameters.Get(GlobalParamId.MasterVolume));
         _patternLevel.SetTarget(Parameters.Get(GlobalParamId.PatternLevel));
         for (int i = 0; i < LayerCount; i++)
@@ -295,7 +308,7 @@ public sealed class AudioEngine : IAudioCallback, ISequencerHost
 
         // FX routing (as the original): POST = master FX after the pattern level, so FX tails survive PTN LVL 0;
         // PRE = master FX before the pattern level, so PTN LVL 0 silences everything.
-        bool fxPre = Parameters.Get(GlobalParamId.FxRouting) >= 0.5f;
+        bool fxPre = _fxPre;
         if (!fxPre) ApplyPatternLevel(dryL, dryR);
         StageTrace?.Invoke("fx");
         _fx.Process(dryL, dryR);
@@ -305,6 +318,8 @@ public sealed class AudioEngine : IAudioCallback, ISequencerHost
         for (int i = 0; i < n; i++)
         {
             float g = ParamCurves.LevelGain(_master.Next());
+            if (_duckDir < 0) { _duck -= _duckStep; if (_duck < 0f) _duck = 0f; g *= _duck; }
+            else if (_duckDir > 0) { _duck += _duckStep; if (_duck > 1f) _duck = 1f; g *= _duck; }
             float l = SoftClip(dryL[i] * g);
             float r = SoftClip(dryR[i] * g);
             output[2 * i] = l; output[2 * i + 1] = r;
@@ -312,6 +327,8 @@ public sealed class AudioEngine : IAudioCallback, ISequencerHost
             if (al > peakL) peakL = al;
             if (ar > peakR) peakR = ar;
         }
+        if (_duckDir < 0 && _duck <= 0f) { _fxPre = _routeWanted; _duckDir = 1; }          // silent: reorder at the chunk boundary
+        else if (_duckDir > 0 && _duck >= 1f) _duckDir = 0;
     }
 
     private void Dispatch(in EngineEvent ev)

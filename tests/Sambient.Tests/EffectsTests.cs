@@ -372,17 +372,19 @@ public class EffectsTests
         fx.SetType(MasterFxType.TapeDelay); fx.SetSpeed(speed); fx.SetAmount(64);
         int n = 2 * Fs;
         var l = new float[n]; var r = new float[n];
-        l[10] = 1f; r[10] = 1f;
+        // the impulse comes after the ~15 ms fade-in that follows a type switch (click-free delay-line start)
+        const int at = 2000;
+        l[at] = 1f; r[at] = 1f;
         RunFx(fx, l, r);
         int lo = (int)((expected - 0.05) * Fs), hi = (int)((expected + 0.05) * Fs);
         int pk = lo;
         for (int i = lo; i < hi; i++) if (Math.Abs(l[i]) > Math.Abs(l[pk])) pk = i;
-        double t = (pk - 10) / (double)Fs;
+        double t = (pk - at) / (double)Fs;
         _out.WriteLine($"echo at {t * 1000:F1} ms (expected {expected * 1000:F1} ms), amplitude {l[pk]:F3}");
         Assert.InRange(t, expected - 0.004, expected + 0.004);
         Assert.True(Math.Abs(l[pk]) > 0.3f);
         // second (ping-pong) repeat appears on the right at ~2t
-        int p2 = (int)((2 * expected) * Fs) + 10;
+        int p2 = (int)((2 * expected) * Fs) + at;
         float m = 0; for (int i = p2 - 600; i < p2 + 600 && i < n; i++) m = Math.Max(m, Math.Abs(r[i]));
         Assert.True(m > 0.05f);
     }

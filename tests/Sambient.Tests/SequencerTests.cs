@@ -20,7 +20,7 @@ internal sealed class SeqRig : IDisposable
     {
         Engine = new AudioEngine(Fs);
         if (waitForWaves) Task.WaitAll(Engine.Bank.EnsureBuiltAsync(1), Engine.Bank.EnsureBuiltAsync(3), Engine.Bank.EnsureBuiltAsync(8), Engine.Noise.EnsureBuiltAsync(1));
-        Seq = new Sequencer(Engine, new PatternBank(Dir));
+        Seq = new Sequencer(Engine, new PatternBank());
         Seq.Tap = e => Events.Add(e);
         Engine.SetGlobal(GlobalParamId.Bpm, 120);
         Engine.SetGlobal(GlobalParamId.ReverbType, 0);        // cheaper offline renders

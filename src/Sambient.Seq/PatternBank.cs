@@ -1,26 +1,30 @@
 namespace Sambient.Seq;
 
 /// <summary>
-/// 8 banks x 16 = 128 palette slots. Banks 1-4 are factory presets (<see cref="FactoryPresets"/>), banks 5-8 start as INIT.
-/// A saved user file wins over the preset of the same slot (delete it with <see cref="RevertToFactory"/>). Files live in
-/// <see cref="DefaultDirectory"/> (~/Library/Application Support/Sambient/patterns), one JSON file per palette: B5-03.json
-/// (bank 5, slot 3; both 1-based). Bank / slot arguments in this API are 0-based. Thread-safe.
+/// The 8 banks x 16 = 128 palette slots of the CURRENT <see cref="Project"/>. The slots live in memory inside the project: saving a
+/// palette into a slot commits it to the project model and marks the project dirty (nothing is written to disk until the project is
+/// saved). Banks 1-4 start as copies of the factory presets (<see cref="FactoryPresets"/>), banks 5-8 as INIT; "revert to factory"
+/// puts the default back. Bank / slot arguments in this API are 0-based. Thread-safe.
 /// </summary>
 public sealed class PatternBank
 {
     public const int Banks = 8, SlotsPerBank = 16, PresetBanks = 4;
-    private readonly object _gate = new();
-    private readonly string?[] _names = new string?[Banks * SlotsPerBank];
+    private Project _project;
 
-    public string Directory { get; }
+    public PatternBank(Project? project = null) { _project = project ?? Project.CreateNew(); }
 
-    public PatternBank(string? directory = null) { Directory = directory ?? DefaultDirectory; }
+    /// <summary>The project whose slots this bank exposes.</summary>
+    public Project Project => Volatile.Read(ref _project);
 
-    public static string DefaultDirectory { get; } = Path.Combine(
-        OperatingSystem.IsMacOS()
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support")
-            : Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "Sambient", "patterns");
+    /// <summary>Raised after <see cref="SetProject"/> replaced the project.</summary>
+    public event Action? ProjectReplaced;
+
+    /// <summary>Makes another project the current one (the caller reloads the sequencer afterwards).</summary>
+    public void SetProject(Project project)
+    {
+        Volatile.Write(ref _project, project ?? throw new ArgumentNullException(nameof(project)));
+        ProjectReplaced?.Invoke();
+    }
 
     public static bool IsPresetBank(int bank) => bank is >= 0 and < PresetBanks;
 
@@ -29,63 +33,21 @@ public sealed class PatternBank
 
     public static int SlotIndex(int bank, int slot) => bank * SlotsPerBank + slot;
 
-    private static void Check(int bank, int slot)
-    {
-        if ((uint)bank >= Banks) throw new ArgumentOutOfRangeException(nameof(bank));
-        if ((uint)slot >= SlotsPerBank) throw new ArgumentOutOfRangeException(nameof(slot));
-    }
+    /// <summary>True when the slot differs from its factory default (the factory preset, or INIT in banks 5-8).</summary>
+    public bool IsModified(int bank, int slot) => Project.IsModified(bank, slot);
 
-    private string PathOf(int bank, int slot) => Path.Combine(Directory, SlotId(bank, slot) + ".json");
+    /// <summary>True when the slot currently holds the factory preset (preset bank, unmodified).</summary>
+    public bool IsFactory(int bank, int slot) => IsPresetBank(bank) && !IsModified(bank, slot);
 
-    /// <summary>True when the user saved a file for the slot.</summary>
-    public bool HasUserFile(int bank, int slot) { Check(bank, slot); return File.Exists(PathOf(bank, slot)); }
+    /// <summary>A fresh working copy of the palette in the slot.</summary>
+    public PatternPalette Load(int bank, int slot) => Project.GetPalette(bank, slot);
 
-    /// <summary>True when the slot currently plays the factory preset (preset bank, no user copy).</summary>
-    public bool IsFactory(int bank, int slot) => IsPresetBank(bank) && !HasUserFile(bank, slot);
+    /// <summary>Palette name of a slot.</summary>
+    public string GetName(int bank, int slot) => Project.GetName(bank, slot);
 
-    /// <summary>A fresh working copy of the palette in the slot: the user file if it loads, else the factory preset, else INIT.</summary>
-    public PatternPalette Load(int bank, int slot)
-    {
-        Check(bank, slot);
-        PatternPalette? p = null;
-        string path = PathOf(bank, slot);
-        if (File.Exists(path))
-        {
-            try { p = PatternJson.TryParse(File.ReadAllText(path)); } catch (IOException) { } catch (UnauthorizedAccessException) { }
-        }
-        p ??= FactoryPresets.Get(bank, slot);
-        p ??= new PatternPalette("INIT");
-        lock (_gate) _names[SlotIndex(bank, slot)] = p.Name;
-        return p;
-    }
+    /// <summary>Commits the palette into the slot of the project (marks the project dirty when the content changed). No file is written.</summary>
+    public void Save(int bank, int slot, PatternPalette palette) => Project.SetPalette(bank, slot, palette);
 
-    /// <summary>Palette name of a slot (cached after the first load).</summary>
-    public string GetName(int bank, int slot)
-    {
-        Check(bank, slot);
-        lock (_gate) { var n = _names[SlotIndex(bank, slot)]; if (n != null) return n; }
-        return Load(bank, slot).Name;
-    }
-
-    /// <summary>Writes the palette (atomically) as the user copy of the slot.</summary>
-    public void Save(int bank, int slot, PatternPalette palette)
-    {
-        Check(bank, slot);
-        System.IO.Directory.CreateDirectory(Directory);
-        string path = PathOf(bank, slot), tmp = path + ".tmp";
-        File.WriteAllText(tmp, PatternJson.Serialize(palette));
-        File.Move(tmp, path, overwrite: true);
-        lock (_gate) _names[SlotIndex(bank, slot)] = palette.Name;
-    }
-
-    /// <summary>Deletes the user copy (a preset slot plays its factory palette again; a user slot becomes INIT). True if a file was removed.</summary>
-    public bool RevertToFactory(int bank, int slot)
-    {
-        Check(bank, slot);
-        string path = PathOf(bank, slot);
-        bool had = File.Exists(path);
-        if (had) File.Delete(path);
-        lock (_gate) _names[SlotIndex(bank, slot)] = null;
-        return had;
-    }
+    /// <summary>Restores the default of the slot (factory preset; INIT in banks 5-8). True if the slot had been modified.</summary>
+    public bool RevertToFactory(int bank, int slot) => Project.RevertSlot(bank, slot);
 }

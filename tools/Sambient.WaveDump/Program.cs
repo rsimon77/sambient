@@ -5,6 +5,8 @@ using Sambient.Engine;
 // Sambient.WaveDump: renders a slow HARMONIC sweep 0 -> 127 of a WAVE to a mono 48 kHz WAV, or lists the implemented WAVEs.
 const int SampleRate = 48000;
 
+if (args.Contains("--click-audit")) return Sambient.Tools.ClickAudit.RunCli(args);
+
 var opts = new Dictionary<string, string>();
 bool list = false, presetReport = false;
 string? demoPath = null;

@@ -22,8 +22,10 @@ public partial class MainViewModel
     [ObservableProperty] private bool _relaxationOn;
     [ObservableProperty] private decimal? _repeats = 1;
     [ObservableProperty] private int _fadeSeconds = 10;
-    [ObservableProperty] private string _chainStatusText = "No chain";
+    [ObservableProperty] private string _chainStatusText = "No song";
     [ObservableProperty] private bool _chainRunning;
+    /// <summary>"3/8 · DEEPDRFT · cycle 2/4" while the song plays (transport bar), else empty.</summary>
+    [ObservableProperty] private string _songPositionText = "";
     [ObservableProperty] private string _patternStatus = "";
 
     // collapsible sections (persisted in settings.json)
@@ -35,7 +37,7 @@ public partial class MainViewModel
 
     public decimal RepeatsMinimum => RelaxationOn ? 2 : 1;
     public decimal RepeatsMaximum => RelaxationOn ? 10 : 99;
-    public string PlayChainText => ChainRunning ? "STOP CHAIN" : "PLAY CHAIN";
+    public string PlayChainText => ChainRunning ? "\u25A0 STOP SONG" : "\u25B6 PLAY SONG";
 
     private void SaveExpander(string key, bool value) { _settings.Expanders[key] = value; MarkSettingsDirty(); }
     partial void OnExpandSeqChanged(bool value) => SaveExpander("seq", value);
@@ -55,7 +57,12 @@ public partial class MainViewModel
         OnPropertyChanged(nameof(RepeatsMinimum));
         OnPropertyChanged(nameof(RepeatsMaximum));
         Repeats = Math.Clamp(Repeats ?? 1, RepeatsMinimum, RepeatsMaximum);
+        PersistChain();
     }
+
+    partial void OnChainLoopChanged(bool value) => PersistChain();
+    partial void OnRepeatsChanged(decimal? value) => PersistChain();
+    partial void OnFadeSecondsChanged(int value) => PersistChain();
 
     partial void OnChainRunningChanged(bool value) => OnPropertyChanged(nameof(PlayChainText));
 
@@ -70,7 +77,7 @@ public partial class MainViewModel
         foreach (var s in Slots)
         {
             s.Bank = b;
-            try { s.Name = _patternBank.GetName(b, s.Slot).TrimEnd(); s.IsUser = _patternBank.HasUserFile(b, s.Slot); }
+            try { s.Name = _patternBank.GetName(b, s.Slot).TrimEnd(); s.IsUser = _patternBank.IsModified(b, s.Slot); }
             catch { s.Name = "?"; }
         }
         RefreshPalettePanel();
@@ -134,11 +141,11 @@ public partial class MainViewModel
     public void SlotSaveHere(PatternSlotViewModel s)
     {
         Seq.SaveAs(BrowsedBank, s.Slot);
-        PatternStatus = $"Saved to {PatternBank.SlotId(BrowsedBank, s.Slot)}";
+        PatternStatus = $"Saved to {PatternBank.SlotId(BrowsedBank, s.Slot)} (project changed: Cmd+S to save the file)";
         RefreshSlotNames();
     }
 
-    /// <summary>Overwrites the slot with an empty INIT palette (the user copy; banks 1-4 can revert to the factory preset).</summary>
+    /// <summary>Overwrites the slot with an empty INIT palette in the project (banks 1-4 can revert to the factory preset).</summary>
     public void SlotInit(PatternSlotViewModel s)
     {
         _patternBank.Save(BrowsedBank, s.Slot, new PatternPalette("INIT"));
@@ -146,7 +153,7 @@ public partial class MainViewModel
         RefreshSlotNames();
     }
 
-    public bool CanRevert(PatternSlotViewModel s) => PatternBank.IsPresetBank(BrowsedBank) && _patternBank.HasUserFile(BrowsedBank, s.Slot);
+    public bool CanRevert(PatternSlotViewModel s) => PatternBank.IsPresetBank(BrowsedBank) && _patternBank.IsModified(BrowsedBank, s.Slot);
 
     public void SlotRevert(PatternSlotViewModel s)
     {
@@ -203,11 +210,22 @@ public partial class MainViewModel
 
     private void AppendChain(int bank, int slot)
     {
-        ChainItems.Add(new ChainItemViewModel(bank, slot, "", RemoveChain, MoveChain));
+        ChainItems.Add(NewChainItem(bank, slot));
         RenumberChain();
+        PersistChain();
     }
 
-    private void RemoveChain(ChainItemViewModel item) { ChainItems.Remove(item); RenumberChain(); }
+    private ChainItemViewModel NewChainItem(int bank, int slot) => new(bank, slot, "", RemoveChain, MoveChain, SelectChainItem);
+
+    /// <summary>Click on an entry: PLAY SONG starts there (click it again to go back to "from the first entry").</summary>
+    private void SelectChainItem(ChainItemViewModel item)
+    {
+        bool was = item.IsSelected;
+        foreach (var c in ChainItems) c.IsSelected = false;
+        item.IsSelected = !was;
+    }
+
+    private void RemoveChain(ChainItemViewModel item) { ChainItems.Remove(item); RenumberChain(); PersistChain(); }
 
     private void MoveChain(ChainItemViewModel item, int delta)
     {
@@ -215,6 +233,7 @@ public partial class MainViewModel
         if (i < 0 || j < 0 || j >= ChainItems.Count) return;
         ChainItems.Move(i, j);
         RenumberChain();
+        PersistChain();
     }
 
     private void RenumberChain()
@@ -247,31 +266,76 @@ public partial class MainViewModel
         ChainItems.Clear();
         if (Seq.Chain.Active) Seq.ClearChain();
         RefreshChainStatus();
+        PersistChain();
     }
 
-    [RelayCommand]
-    private void PlayOrStopChain()
+    /// <summary>The chain panel / transport state written back into the project's song chain (marks the project dirty when it changed).</summary>
+    private void PersistChain()
     {
-        if (Seq.Chain.Active) { StopTransport(false); return; }
-        if (ChainItems.Count == 0) { ChainStatusText = "Chain is empty: turn CHAIN EDIT on and click slots"; return; }
-        Seq.SetChain(ChainItems.Select(c => (c.Bank, c.Slot)).ToList(), ChainLoop, (int)(Repeats ?? 1), RelaxationOn, FadeSeconds);
-        Seq.PlayChain();
+        if (_applyingProject || _session == null) return;
+        var c = _session.Project.GetChain(0);
+        c.Entries = ChainItems.Select(i => new ChainSlot(i.Bank, i.Slot)).ToList();
+        c.Loop = ChainLoop;
+        c.Relaxation = RelaxationOn;
+        c.Repeats = (int)(Repeats ?? 1);
+        c.FadeSeconds = FadeSeconds;
+        _session.Project.SetChain(0, c);
+    }
+
+    /// <summary>Shows the project's song chain in the chain panel (project open / revert).</summary>
+    private void LoadChainFromProject()
+    {
+        bool was = _applyingProject;
+        _applyingProject = true;
+        try
+        {
+            var c = _session.Project.GetChain(0);
+            ChainLoop = c.Loop;
+            RelaxationOn = c.Relaxation;
+            Repeats = c.Repeats;
+            FadeSeconds = c.FadeSeconds;
+            ChainItems.Clear();
+            foreach (var e in c.Entries) ChainItems.Add(NewChainItem(e.Bank, e.Slot));
+            RenumberChain();
+        }
+        finally { _applyingProject = was; }
+    }
+
+    /// <summary>True while the song chain is playing (a finished, non-looping song is not "running").</summary>
+    public bool SongPlaying => Seq.Chain.Active && Seq.IsPlaying;
+
+    /// <summary>PLAY SONG: plays the project's song chain from the first entry (or the selected one), with its loop / repeats / relaxation settings.</summary>
+    [RelayCommand]
+    private void PlayOrStopSong()
+    {
+        if (SongPlaying) { StopTransport(false); return; }
+        var c = _session.Project.GetChain(0);
+        if (c.Entries.Count == 0) { ChainStatusText = "Song is empty: turn CHAIN EDIT on and click slots"; return; }
+        CommitCurrentPalette();            // the song plays what you hear: live edits of the current palette are part of the project
+        Seq.SetChain(c.Entries.Select(e => (e.Bank, e.Slot)).ToList(), c.Loop, c.Repeats, c.Relaxation, c.FadeSeconds, c.FadeInSeconds);
+        int start = Math.Max(0, ChainItems.ToList().FindIndex(i => i.IsSelected));
+        Seq.PlayChainFrom(start);
         AfterUiPaletteChange();
     }
 
     private void RefreshChainStatus()
     {
         var c = Seq.Chain;
-        ChainRunning = c.Active;
+        bool running = c.Active && Seq.IsPlaying;
+        ChainRunning = running;
         int repeats = RelaxationOn ? (int)Math.Clamp(Repeats ?? 2, 2, 10) : (int)Math.Clamp(Repeats ?? 1, 1, 99);
-        string text;
-        if (!c.Active) text = ChainItems.Count == 0 ? "No chain" : $"Chain ready: {ChainItems.Count} palettes";
+        string text, pos = "";
+        if (!c.Active) text = ChainItems.Count == 0 ? "No song" : $"Song ready: {ChainItems.Count} palettes";
         else
         {
-            text = $"Chain {c.Index + 1}/{c.Count} · cycle {Math.Min(c.CycleCount + 1, repeats)}/{repeats}";
+            string name = c.Index >= 0 && c.Index < ChainItems.Count ? SafeName(ChainItems[c.Index].Bank, ChainItems[c.Index].Slot) : "";
+            text = $"{c.Index + 1}/{c.Count} · {name} · cycle {Math.Min(c.CycleCount + 1, repeats)}/{repeats}";
             if (c.FadePhase == 1) text += $" · fading out {c.FadeGain:P0}";
             else if (c.FadePhase == 2) text += $" · fading in {c.FadeGain:P0}";
+            if (running) pos = text;
+            else text = "Song finished · " + text;
         }
         if (text != ChainStatusText) ChainStatusText = text;
+        if (pos != SongPositionText) SongPositionText = pos;
     }
 }

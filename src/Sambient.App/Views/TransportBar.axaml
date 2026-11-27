@@ -4,7 +4,7 @@
              x:Class="Sambient.App.Views.TransportBar"
              x:DataType="vm:MainViewModel">
   <Border Classes="panel" Padding="10,8">
-    <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto,Auto">
+    <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto,Auto" RowDefinitions="Auto,Auto">
       <!-- PLAY / STOP -->
       <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" Margin="0,0,14,0" VerticalAlignment="Center">
         <Button x:Name="PlayButton" Classes="small" Classes.playing="{Binding IsPlaying}" Content="&#x25B6; PLAY" Command="{Binding PlayCommand}"
@@ -41,6 +41,14 @@
       <TextBlock Grid.Column="4" Text="{Binding CycleText}" Classes="caption" VerticalAlignment="Center" />
       <TextBlock Grid.Column="5" Text="{Binding RecModeText}" Foreground="#ff6b6b" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,12,0" />
       <Button x:Name="HelpButton" Grid.Column="6" Classes="small" Content="?" VerticalAlignment="Center" ToolTip.Tip="{Binding ShortcutsHelp}" />
+      <!-- SONG mode: plays the project's song chain -->
+      <StackPanel Grid.Row="1" Grid.ColumnSpan="7" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" Margin="0,8,0,0">
+        <TextBlock Text="SONG" Classes="caption" VerticalAlignment="Center" />
+        <Button Classes="small" Classes.playing="{Binding ChainRunning}" Content="{Binding PlayChainText}" Command="{Binding PlayOrStopSongCommand}"
+                ToolTip.Tip="Play the project's song chain from the first entry (or the entry selected in CHAIN / RELAXATION)" />
+        <TextBlock Text="{Binding SongPositionText}" FontFamily="Menlo, Consolas, monospace" FontSize="12" Foreground="#7be495" VerticalAlignment="Center"
+                   ToolTip.Tip="Song position: entry / palette / pattern cycle" />
+      </StackPanel>
     </Grid>
   </Border>
 </UserControl>

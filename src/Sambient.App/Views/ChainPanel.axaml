@@ -3,7 +3,14 @@
              xmlns:vm="using:Sambient.App.ViewModels"
              x:Class="Sambient.App.Views.ChainPanel"
              x:DataType="vm:MainViewModel">
+  <UserControl.Styles>
+    <Style Selector="Border.chainitem"><Setter Property="Background" Value="#252932" /></Style>
+    <Style Selector="Border.chainitem.sel"><Setter Property="Background" Value="#2f6fa8" /></Style>
+    <Style Selector="Button.chainsel"><Setter Property="Background" Value="Transparent" /><Setter Property="Padding" Value="2,0" /></Style>
+  </UserControl.Styles>
   <StackPanel Spacing="8">
+    <TextBlock Classes="caption" TextWrapping="Wrap"
+               Text="SONG: the chain below is saved in the project. PLAY SONG plays it from the first entry (or from the entry you clicked) with the loop / repeats / relaxation settings; PLAY always plays the current pattern." />
     <WrapPanel>
       <ToggleButton Classes="small amber" Content="CHAIN EDIT" IsChecked="{Binding ChainEdit}" Margin="0,0,8,6"
                     ToolTip.Tip="While on, clicking a slot in the pattern browser appends it to the chain" />
@@ -22,7 +29,7 @@
       </StackPanel>
       <ToggleButton Classes="small blue" Content="R.RST" IsChecked="{Binding ResetReverb}" Margin="0,0,8,6"
                     ToolTip.Tip="Reset the reverb on every palette change (off: only when the reverb type changes)" />
-      <Button Classes="small playing" Content="{Binding PlayChainText}" Command="{Binding PlayOrStopChainCommand}" Margin="0,0,8,6" />
+      <Button Classes="small" Classes.playing="{Binding ChainRunning}" Content="{Binding PlayChainText}" Command="{Binding PlayOrStopSongCommand}" Margin="0,0,8,6" />
       <Button Classes="small" Content="CLEAR" Command="{Binding ClearChainItemsCommand}" Margin="0,0,8,6" />
     </WrapPanel>
     <ItemsControl ItemsSource="{Binding ChainItems}">
@@ -31,9 +38,11 @@
       </ItemsControl.ItemsPanel>
       <ItemsControl.ItemTemplate>
         <DataTemplate x:DataType="vm:ChainItemViewModel">
-          <Border Background="#252932" CornerRadius="5" Padding="8,3" Margin="0,0,6,6">
+          <Border Classes="chainitem" Classes.sel="{Binding IsSelected}" CornerRadius="5" Padding="8,3" Margin="0,0,6,6">
             <StackPanel Orientation="Horizontal" Spacing="4">
-              <TextBlock Text="{Binding Text}" VerticalAlignment="Center" FontFamily="Menlo, Consolas, monospace" FontSize="12" />
+              <Button Classes="chainsel" Command="{Binding SelectCommand}" ToolTip.Tip="Click: PLAY SONG starts at this entry">
+                <TextBlock Text="{Binding Text}" VerticalAlignment="Center" FontFamily="Menlo, Consolas, monospace" FontSize="12" />
+              </Button>
               <Button Classes="small" Padding="5,0" MinWidth="22" Content="&#x25C0;" Command="{Binding UpCommand}" ToolTip.Tip="Move earlier" />
               <Button Classes="small" Padding="5,0" MinWidth="22" Content="&#x25B6;" Command="{Binding DownCommand}" ToolTip.Tip="Move later" />
               <Button Classes="small" Padding="5,0" MinWidth="22" Content="&#x2715;" Command="{Binding RemoveCommand}" ToolTip.Tip="Remove from chain" />

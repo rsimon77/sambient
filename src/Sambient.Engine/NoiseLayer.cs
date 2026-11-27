@@ -44,7 +44,9 @@ public sealed class NoiseLayer : ILayer, IVoiceSink, IModulatedLayer
     private FilterMode _filter;
     private float _octaveSemis, _bendRange;
     private readonly Tuning _tuning = new(semitoneOnly: true);
+    private float _gPrev = -1f;        // output gain at the end of the previous sub-block (-1 = none yet)
     private SmoothedValue _tuneAll;      // TUNE ALL in cents (smoothed, no zipper)
+    private SmoothedValue _octave;       // OCTAVE in semitones: a 5 ms phase-continuous ramp instead of an instant pitch step
 
     public int Index => _index;
     public int ActiveVoices { get; private set; }
@@ -64,6 +66,7 @@ public sealed class NoiseLayer : ILayer, IVoiceSink, IModulatedLayer
         _pan = new SmoothedValue(parameters.Get(index, ParamId.Pan), sampleRate, 20f);
         _bend = new SmoothedValue(0f, sampleRate, 8f);
         _tuneAll = new SmoothedValue(parameters.Get(GlobalParamId.TuneAllCents), sampleRate, 25f);
+        _octave = new SmoothedValue(12f * parameters.Get(index, ParamId.Octave), sampleRate, 5f);
         UpdateParams();
     }
 
@@ -229,6 +232,7 @@ public sealed class NoiseLayer : ILayer, IVoiceSink, IModulatedLayer
             _params.Get(GlobalParamId.MasterTuneCents));
         _tuneAll.SetTarget(_params.Get(GlobalParamId.TuneAllCents));
         _octaveSemis = _tuning.IsSpecial ? 0f : 12f * _params.Get(i, ParamId.Octave);
+        _octave.SetTarget(_octaveSemis);
         _bendRange = _params.Get(GlobalParamId.PitchBendRange);
 
         float a = _params.Get(i, ParamId.Attack), r = _params.Get(i, ParamId.Release);
@@ -260,8 +264,13 @@ public sealed class NoiseLayer : ILayer, IVoiceSink, IModulatedLayer
 
     private void RenderSub(Span<float> output, int offset, int n)
     {
-        _balance.Skip(n); _cutoff.Skip(n); _reso.Skip(n); _level.Skip(n); _pan.Skip(n); _bend.Skip(n); _tuneAll.Skip(n);
+        _balance.Skip(n); _cutoff.Skip(n); _reso.Skip(n); _level.Skip(n); _pan.Skip(n); _bend.Skip(n); _tuneAll.Skip(n); _octave.Skip(n);
         _mod.BeginSub(n);       // layer-level LFO clocks and send modulation
+
+        // output gain ramped per sample (the LEVEL curve is dB-linear: a few knob units can be a 2 dB step)
+        float gNew = ParamCurves.LevelGain(_level.Current) * VoiceMixScale;
+        float g0 = _gPrev < 0f ? gNew : _gPrev;
+        _gPrev = gNew;
 
         bool any = false;
         foreach (var v in _voices) if (v.Active) { any = true; break; }
@@ -271,7 +280,7 @@ public sealed class NoiseLayer : ILayer, IVoiceSink, IModulatedLayer
         float t = Math.Clamp(_balance.Current, 0f, 127f) * (1f / 127f) * (MathF.PI * 0.5f);
         var block = new NoiseBlock
         {
-            PitchSemis = _octaveSemis + _bend.Current * _bendRange + _tuneAll.Current * 0.01f,
+            PitchSemis = _octave.Current + _bend.Current * _bendRange + _tuneAll.Current * 0.01f,
             SrcRatio = _sample != null ? _sample.SampleRate / _fs : 1.0,
             NoiseGain = MathF.Cos(t),
             SampleGain = MathF.Sin(t),
@@ -292,10 +301,11 @@ public sealed class NoiseLayer : ILayer, IVoiceSink, IModulatedLayer
         foreach (var v in _voices)
             if (v.Active) v.Process(mixL, mixR, n, in block);
 
-        float g = ParamCurves.LevelGain(_level.Current) * VoiceMixScale;
+        float gs = (gNew - g0) / n, g = g0;
         int o = offset * 2;      // the voices already applied the pan law
         for (int i = 0; i < n; i++)
         {
+            g += gs;
             output[o++] += mixL[i] * g;
             output[o++] += mixR[i] * g;
         }

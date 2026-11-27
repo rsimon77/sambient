@@ -7,4 +7,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
+  <!-- The real-time DSP must be optimized even in Debug builds (`dotnet run` defaults to Debug): unoptimized code
+       uses ~4x more of the audio callback budget and makes dropouts (clicks) far more likely. -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sambient.Dsp' Or '$(MSBuildProjectName)' == 'Sambient.Engine' Or '$(MSBuildProjectName)' == 'Sambient.Seq' Or '$(MSBuildProjectName)' == 'Sambient.Audio'">
+    <Optimize>true</Optimize>
+  </PropertyGroup>
 </Project>
