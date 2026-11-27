@@ -14,7 +14,7 @@ namespace Sambient.App.ViewModels;
 public partial class MainViewModel
 {
     private PianoRollEditor? _roll;
-    private readonly Dictionary<int, int> _auditionLayer = new();
+    private readonly Dictionary<int, (int Layer, long Start)> _auditionLayer = new();
     private readonly List<(long Due, int Layer, int Note)> _tapOffs = new();
     private int _rollScaleSig = -1;
 
@@ -123,6 +123,19 @@ public partial class MainViewModel
 
     // ------------------------------------------------------------ audition (never records: straight to the engine)
 
+    /// <summary>
+    /// Shortest audible preview for a layer: ambient patches often have slow attacks (0.5..3+ s), so a click-length
+    /// note would end before it is heard. The preview lasts at least the attack time (+ a little), 300..1500 ms.
+    /// </summary>
+    private long MinAuditionMs(int layer)
+        => (long)Math.Clamp(Sambient.Dsp.Params.ParamCurves.AttackMs(_params.GetBase(layer, ParamId.Attack)) + 200f, 300f, 1500f);
+
+    private void AuditionOn(int layer, int played)
+    {
+        _tapOffs.RemoveAll(t => t.Layer == layer && t.Note == played);   // a pending delayed note-off must not cut the new note
+        Engine.NoteOn(layer, played, (int)_params.GetBase(layer, ParamId.Velocity));
+    }
+
     private void RollAudition(int note, bool on)
     {
         int layer = SelIdx;
@@ -130,12 +143,14 @@ public partial class MainViewModel
         if (on)
         {
             if (_auditionLayer.ContainsKey(note)) return;
-            _auditionLayer[note] = layer;
-            Engine.NoteOn(layer, played, (int)_params.GetBase(layer, ParamId.Velocity));
+            _auditionLayer[note] = (layer, Environment.TickCount64);
+            AuditionOn(layer, played);
         }
-        else if (_auditionLayer.Remove(note, out int l))
+        else if (_auditionLayer.Remove(note, out var a))
         {
-            Engine.NoteOff(l, played);
+            long due = a.Start + MinAuditionMs(a.Layer);
+            if (Environment.TickCount64 >= due) Engine.NoteOff(a.Layer, played);
+            else _tapOffs.Add((due, a.Layer, played));                     // released quickly: keep sounding until audible
         }
     }
 
@@ -143,8 +158,8 @@ public partial class MainViewModel
     {
         int layer = SelIdx;
         int played = Math.Clamp(note + (int)MathF.Round(_params.Get(GlobalParamId.Transpose)), 0, 127);
-        Engine.NoteOn(layer, played, (int)_params.GetBase(layer, ParamId.Velocity));
-        _tapOffs.Add((Environment.TickCount64 + 160, layer, played));
+        AuditionOn(layer, played);
+        _tapOffs.Add((Environment.TickCount64 + MinAuditionMs(layer), layer, played));
     }
 
     /// <summary>The adapter that lets the editor talk to the sequencer of the selected layer.</summary>
