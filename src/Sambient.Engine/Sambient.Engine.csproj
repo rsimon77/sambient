@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\Sambient.Dsp\Sambient.Dsp.csproj" />
+    <ProjectReference Include="..\Sambient.Audio\Sambient.Audio.csproj" />
   </ItemGroup>
 </Project>
