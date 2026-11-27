@@ -1,0 +1,25 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Sambient.App.ViewModels"
+             x:Class="Sambient.App.Views.TuningPanel"
+             x:DataType="vm:MainViewModel">
+  <WrapPanel>
+    <StackPanel Spacing="2" Margin="0,0,16,8" VerticalAlignment="Top">
+      <TextBlock Text="TEMPERAMENT" Classes="caption" />
+      <ComboBox ItemsSource="{Binding TemperamentChoice.Options}" SelectedItem="{Binding TemperamentChoice.Selected}" MinWidth="110" MaxDropDownHeight="300" />
+    </StackPanel>
+    <StackPanel Spacing="2" Margin="0,0,16,8" VerticalAlignment="Top" ToolTip.Tip="Tonic (PR.MJ .. PY.FL) or concert pitch (SLFG / CHKR / PLNT) of the selected layer. EQUA has no key.">
+      <TextBlock Text="{Binding LayerTitle, StringFormat='KEY · {0}'}" Classes="caption" />
+      <ComboBox ItemsSource="{Binding TuningKeyChoice.Options}" SelectedItem="{Binding TuningKeyChoice.Selected}" MinWidth="110"
+                IsEnabled="{Binding KeyEnabled}" MaxDropDownHeight="300" />
+    </StackPanel>
+    <Border Margin="0,0,0,0" ToolTip.Tip="{Binding MasterTuneTip}" ToolTip.ShowOnDisabled="True">
+      <ContentControl Content="{Binding MasterTuneKnob}" />
+    </Border>
+    <ToggleButton Classes="small blue" Content="Hz" IsChecked="{Binding ShowMasterHz}" VerticalAlignment="Top" Margin="0,30,14,0"
+                  ToolTip.Tip="Show the master tune as the frequency of A4 (Hz) instead of cents" />
+    <Border Margin="0,0,0,0" ToolTip.Tip="Real-time tune of all layers (&#177;1200 cents). Double-click resets">
+      <ContentControl Content="{Binding TuneAllKnob}" />
+    </Border>
+  </WrapPanel>
+</UserControl>

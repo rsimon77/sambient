@@ -60,7 +60,7 @@
 - **MIDI**: DryWetMIDI (Launchkey MIDI + DAW port, SysEx).
 - **UI**: Avalonia 11, MVVM (CommunityToolkit.Mvvm), saját knob/fader/step-grid/hullámforma vezérlők.
 - **Tesztek**: xUnit (DSP egységtesztek: frekvencia, szinten tartás, nincs NaN/denormal; szekvenszer-időzítés; preset round-trip).
-- **Python (offline eszközök)**: numpy/scipy a wavetable-generáláshoz (`tools/wavegen`) és a noise minták előkészítéséhez (resample 32 kHz, loop crossfade). A kimenet bináris/`.wav` fájl, amit a C# app betölt.
+- **Python (offline eszközök)**: csak a noise minták előkészítéséhez (resample 32 kHz, loop crossfade → `.wav`). A wavetable-ök C#-ban készülnek induláskor (M1 döntés: így nincs 30–170 MB bináris a gitben, és a buildhez nem kell Python).
 - A library-k pontos, aktuális verzióit a projekt indításakor (M0) kell rögzíteni és kipróbálni macOS/arm64-en.
 
 ---
@@ -95,9 +95,9 @@ Szabályok:
 ## 4. DSP részletek
 
 ### 4.1 BlendWave wavetable motor (a hangzás kulcsa)
-1. **Táblagenerálás offline** (külön `tools/wavegen` C++ vagy Python program): 32 WAVE × 128 frame × 2048 minta. Minden WAVE egy saját „recept” a manual leírása alapján, a HARMONIC paraméter a recept fő változója:
+1. **Táblagenerálás induláskor, C#-ban** (`Sambient.Dsp.Wavetables`, WAVE-enként lustán, háttérszálon): 32 WAVE × 128 frame. Meghallgatáshoz: `tools/Sambient.WaveDump` (HARMONIC-söprés WAV-ba). Minden WAVE egy saját „recept” a manual leírása alapján, a HARMONIC paraméter a recept fő változója:
    - 1 SAW.S waveshaped saw · 2 SQR.D PWM · 3 SIN.S · 4 SIN.D duty-modulált szinusz · 5 SQR.S · 6 TRI.S · 7 SQ.SN · 8 EV.OD páros→páratlan felharmonikus morf · 9 OCTV sync-elt alapformák · 10 SIN.M · 11 SIN.F wavefold · 12 TRI.F · 13 SIN.C bitcrush · 14 FM.CR · 15 FM.OD · 16 SYNC · 17–18 HRM.1/2 additív + sync/FM · 19 CL.FM · 20 FRML · 21–22 FRM.1/2 formáns (FRM.2 magánhangzó-formánsokkal) · 23 27.PS (27 felharmonikus pozíció) · 24 FM.WF · 25 FM.PF 2-op FM · 26 AD.MP · 27 BCHL west-coast complex osc · 28 SQR.R zajjal AM · 29 RNDM 127 véletlen hullám · 30 S.RND morfoló véletlen · 31 TRI.N rózsaszín/fehér zaj spektrummal · 32 WH.NS fehérzaj-spektrum.
-2. **Sávkorlátozás**: minden frame-ből FFT-vel oktávonként mipmap (≈10 szint), így nincs aliasing magas hangokon. Memória: float16 tárolással ~70 MB, vagy betöltéskor generálva.
+2. **Sávkorlátozás**: minden frame-ből FFT-vel oktávonként mipmap (≈10 szint), így nincs aliasing magas hangokon. A szintenként csökkenő táblahossz miatt WAVE-enként néhány MB.
 3. **Lejátszás**: frame-ek közti lineáris interpoláció (HARMONIC 0–127 → frame 0–127, modulálva folyamatos), mintán belül Hermite/kubikus interpoláció, mipmap-választás a lejátszott frekvencia alapján, mipmap-szintek közti crossfade.
 4. Fontos: a WH.NS-re a manual leírja, hogy HARMONIC LFO-val (63/63) **fehérzajt** ad – ezt a modulációs sebességnek audio-rátán kell követnie, tehát a HARMONIC moduláció mintánként (vagy 16-os blokkonként) frissül.
 
@@ -165,6 +165,7 @@ Képernyő-elrendezés (egy ablak, átméretezhető):
 - **4 réteg-oszlop** egymás mellett: wave + HARMONIC előnézet (2D hullámforma, a HARMONIC pozícióval együtt animálva), structure, PITCH/detune/balance, MOD, szűrő görbével, AR görbével, LFO1/2 mini-kijelzővel, level/pan/sendek. A kiválasztott réteg kiemelve – **ugyanaz, amit a Launchkey knobjai éppen vezérelnek**.
 - **Alsó rész**: step grid 4 sávval (1–64 lépés, P-lock jelölés, valószínűség, tie), mellette a Pattern lánc / Relaxation vezérlő.
 - **Lenyíló panelek**: effektek (reverb/shimmer, master FX), noise minta-szerkesztő (hullámforma, loop pontok, WAV drag&drop), hangolás, MIDI/Launchkey beállítások.
+- **On-screen billentyűzet (opcionális, ki-/bekapcsolható panel)**: 2–4 oktávos, egérrel játszható (kattintás = note on, elengedés = note off, húzással glissando), oktáv ◀ ▶ váltó, velocity a billentyű függőleges kattintási pozíciójából; a számítógép billentyűzetéről is játszható (A W S E D F T G Y H U J K… sor, Z/X = oktáv). A Launchkey-ről vagy bármelyik MIDI-forrásból érkező lenyomott hangokat kiemelve mutatja. A beállítás (látszik-e) megmarad az app újraindítása után.
 - Minden lista-paraméter (FLTR TYPE, LFO SHAPE, RVB TYPE …) legördülő menü – a VALUE enkóderre így nincs szükség.
 - Megvalósítás: Avalonia, saját vektoros vezérlőkkel (Retina, sötét téma). A Launchkey-ről jövő változások azonnal megjelennek a képernyőn (és fordítva); a UI 30–60 Hz-en frissül, nem az audio szálról.
 - MIDI learn minden paraméterre (jobb klikk → Learn), plusz a beépített Launchkey-térkép.
@@ -234,7 +235,7 @@ src/Sambient.Control/
 | # | Mérföldkő | Tartalom | Becsült idő (1 fő, hobbi tempó) |
 |---|---|---|---|
 | M0 | Váz | .NET solution, Avalonia ablak, PortAudio kimenet (szinuszteszt, kattogásmentes 256-os pufferrel), DryWetMIDI: Launchkey portok listázása | 2–3 nap |
-| M1 | Egy réteg szól | wavegen eszköz + 4–6 WAVE, mipmap osc, HARMONIC morf, AR, SVF, POLY; **Launchkey billentyű + 8 knob alap CC-vel** (már itt játszható) | 1–2 hét |
+| M1 | Egy réteg szól | C# wavetable-generátor + 6 WAVE, mipmap osc, HARMONIC morf, AR, SVF, POLY; **Launchkey billentyű + 8 knob alap CC-vel** (már itt játszható) | 1–2 hét |
 | M2 | BlendWave teljes | 6 struktúra, Yin/Yang, MOD LFO, ATMOS1 ring, ATMOS2 FM+feedback, mind a 32 WAVE recept | 2–3 hét |
 | M3 | 4 réteg + noise | NoiseLayer, minták, loop xfade, line-in, mintavételezés, mixer | 1–2 hét |
 | M4 | Moduláció & hangszólás | 2 LFO × 24 forma × 16 cél, triggerek, MONO/LGT/UNI/ARP, hold, budget mód | 1–2 hét |
@@ -268,7 +269,6 @@ A Launchkey-integráció azért kerül előre (M1-ben az alap, M6.5-ben a teljes
 Sambient/
  ├─ Sambient.sln
  ├─ tools/                 # Python (numpy/scipy), offline
- │   ├─ wavegen/           # 32 WAVE recept → wavetables.bin (+ mipmapek)
  │   └─ noiseprep/         # minták: 32 kHz, 8 s, loop crossfade → .wav
  ├─ resources/wavetables/  resources/noise/  resources/presets/
  ├─ src/

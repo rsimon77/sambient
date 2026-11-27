@@ -7,6 +7,11 @@ shimmer reverb and a step sequencer. See [PLAN.md](PLAN.md) for the full plan (i
 
 ## Status
 - **M0** – solution skeleton, PortAudio output, Avalonia window, Launchkey MK3 port detection ✅
+- **M1** – BlendWave wavetable engine (FFT band-limited, 128-frame morph), first synth layer, on-screen keyboard ✅
+- **M2** – 4 layers (3 synth + noise), shimmer reverb (9 types), 6 master FX, all 32 WAVEs, 8 procedural noise textures ✅
+- **M3** – 6 structures (Yin/Yang, ring mod, FM), MOD + 2 LFOs (24 shapes, 17 destinations), POLY/MONO/LEGATO/UNISON/ARP, HOLD ✅
+- **M4** – step sequencer (64 steps, P-locks, ties, probability, recording), pattern palettes (8×16, chain, relaxation), tuning systems ✅
+- next: Launchkey MK3 DAW mode (pads = steps with LEDs) – protocol notes in [docs/launchkey-mk3-daw-protocol.md](docs/launchkey-mk3-daw-protocol.md); sampling / line in
 
 ## Build & run (Apple Silicon, .NET 11 SDK)
 ```bash
@@ -30,4 +35,4 @@ dotnet run --project tools/Sambient.MidiProbe -- --listen 10
 | `src/Sambient.Audio` | PortAudio (CoreAudio) output |
 | `src/Sambient.Control` | MIDI, Launchkey MK3 surface |
 | `src/Sambient.App` | Avalonia UI |
-| `tools/` | MIDI probe; offline Python tools (wavetable generation) |
+| `tools/` | MIDI probe, WaveDump (wave/engine/fx/seq demos, preset loudness report), NoiseDump |

@@ -14,5 +14,6 @@
     <ProjectReference Include="..\Sambient.Engine\Sambient.Engine.csproj" />
     <ProjectReference Include="..\Sambient.Audio\Sambient.Audio.csproj" />
     <ProjectReference Include="..\Sambient.Control\Sambient.Control.csproj" />
+    <ProjectReference Include="..\Sambient.Seq\Sambient.Seq.csproj" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,46 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Sambient.App.ViewModels"
+             x:Class="Sambient.App.Views.TransportBar"
+             x:DataType="vm:MainViewModel">
+  <Border Classes="panel" Padding="10,8">
+    <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto,Auto">
+      <!-- PLAY / STOP -->
+      <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" Margin="0,0,14,0" VerticalAlignment="Center">
+        <Button x:Name="PlayButton" Classes="small" Classes.playing="{Binding IsPlaying}" Content="&#x25B6; PLAY" Command="{Binding PlayCommand}"
+                ToolTip.Tip="Play from step 1 (Space). Right-click: MIDI learn" />
+        <Button x:Name="StopButton" Classes="small" Content="&#x25A0; STOP" MinWidth="84"
+                ToolTip.Tip="Stop and release all notes. Shift+click: natural stop (notes ring out). Right-click: MIDI learn" />
+        <ToggleButton Classes="small blue" Content="NAT" IsChecked="{Binding NaturalStop}" ToolTip.Tip="STOP lets sounding notes release naturally" />
+      </StackPanel>
+      <!-- REC / OVERWRITE / PRM REC / METRO -->
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" Margin="0,0,14,0" VerticalAlignment="Center">
+        <ToggleButton x:Name="RecButton" Classes="small rec" Content="&#x25CF; REC" IsChecked="{Binding RecArmed}"
+                      ToolTip.Tip="Record (R): step record while stopped, realtime record while playing. Right-click: MIDI learn" />
+        <ToggleButton Classes="small amber" Content="OVR" IsChecked="{Binding OverwriteOn}" ToolTip.Tip="Overwrite: steps passed while recording lose their old notes" />
+        <ToggleButton x:Name="PrmRecButton" Classes="small amber" Content="PRM REC" IsChecked="{Binding PrmRecOn}"
+                      ToolTip.Tip="Parameter record (N): knob moves while playing become P-locks of the current step. Right-click: MIDI learn" />
+        <ToggleButton x:Name="MetroButton" Classes="small blue" Content="METRO" IsChecked="{Binding MetroOn}"
+                      ToolTip.Tip="Metronome (M). Right-click: volume and pre-count" />
+      </StackPanel>
+      <!-- BPM -->
+      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" Margin="0,0,14,0" VerticalAlignment="Center">
+        <TextBlock Text="BPM" Classes="caption" VerticalAlignment="Center" />
+        <NumericUpDown Value="{Binding Bpm}" Minimum="40" Maximum="250" Increment="1" FormatString="0" Width="110" />
+        <ToggleButton Classes="small blue" Content="{Binding BpmModeText}" IsChecked="{Binding BpmGlobal}"
+                      ToolTip.Tip="BPM mode. PTN: a loaded palette brings its own BPM. GLBL: the current BPM is kept" />
+      </StackPanel>
+      <!-- palette display -->
+      <Border Grid.Column="3" Background="#12141a" CornerRadius="6" Padding="12,5" MinWidth="230" VerticalAlignment="Center" Margin="0,0,10,0">
+        <StackPanel Orientation="Horizontal" Spacing="10">
+          <TextBlock Text="{Binding PaletteText}" FontFamily="Menlo, Consolas, monospace" FontWeight="Bold" FontSize="15" Foreground="#7be495" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding QueuedText}" FontFamily="Menlo, Consolas, monospace" FontSize="13" Foreground="#ffb454" VerticalAlignment="Center"
+                     Opacity="{Binding QueuedBlinkOn, Converter={x:Static vm:BlinkConverter.Instance}}" ToolTip.Tip="Queued palette: switches when the pattern cycle ends" />
+        </StackPanel>
+      </Border>
+      <TextBlock Grid.Column="4" Text="{Binding CycleText}" Classes="caption" VerticalAlignment="Center" />
+      <TextBlock Grid.Column="5" Text="{Binding RecModeText}" Foreground="#ff6b6b" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,12,0" />
+      <Button x:Name="HelpButton" Grid.Column="6" Classes="small" Content="?" VerticalAlignment="Center" ToolTip.Tip="{Binding ShortcutsHelp}" />
+    </Grid>
+  </Border>
+</UserControl>

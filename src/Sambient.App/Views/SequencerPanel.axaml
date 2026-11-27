@@ -1,0 +1,139 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Sambient.App.ViewModels"
+             x:Class="Sambient.App.Views.SequencerPanel"
+             x:DataType="vm:MainViewModel">
+  <StackPanel Spacing="10">
+    <!-- modes + page selector -->
+    <Grid ColumnDefinitions="*,Auto">
+      <WrapPanel VerticalAlignment="Center">
+        <TextBlock Text="{Binding LayerTitle}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,14,0" />
+        <ToggleButton Classes="small amber" Content="AUTO-STEP" IsChecked="{Binding AutoStep}" Margin="0,0,6,0"
+                      ToolTip.Tip="Step record: advance the cursor when the keys are released" />
+        <ToggleButton Classes="small amber" Content="TIE" IsChecked="{Binding TieMode}" Margin="0,0,6,0"
+                      ToolTip.Tip="Tie input: click the start step, play and hold a key, click the end step" />
+        <ToggleButton Classes="small blue" Content="FOLLOW" IsChecked="{Binding FollowPlayhead}" Margin="0,0,10,0"
+                      ToolTip.Tip="The visible page follows the playhead" />
+        <TextBlock Text="{Binding TieHint}" Classes="caption" Foreground="#ffb454" VerticalAlignment="Center" />
+      </WrapPanel>
+      <ItemsControl Grid.Column="1" ItemsSource="{Binding Pages}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="2" /></ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:SelectorItemViewModel">
+            <Button Classes="seg" Classes.on="{Binding IsSelected}" Content="{Binding Text}" Command="{Binding SelectCommand}"
+                    IsEnabled="{Binding IsEnabled}" />
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </Grid>
+
+    <!-- the 16 step buttons of the page -->
+    <ItemsControl x:Name="StepGridView" ItemsSource="{Binding StepCells}">
+      <ItemsControl.ItemsPanel>
+        <ItemsPanelTemplate><UniformGrid Columns="16" /></ItemsPanelTemplate>
+      </ItemsControl.ItemsPanel>
+      <ItemsControl.ItemTemplate>
+        <DataTemplate x:DataType="vm:StepCellViewModel">
+          <Border Classes="step" Classes.on="{Binding HasNotes}" Classes.play="{Binding IsPlayhead}" Classes.sel="{Binding IsSelected}"
+                  Classes.off="{Binding !InLength}">
+            <Grid RowDefinitions="Auto,*,Auto" Margin="4,2">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="{Binding Label}" FontSize="10" Foreground="#c4c9d6" />
+                <TextBlock Grid.Column="1" Text="{Binding NoteCountText}" FontSize="10" FontWeight="Bold" />
+              </Grid>
+              <Grid Grid.Row="1" ColumnDefinitions="Auto,*" VerticalAlignment="Bottom">
+                <Ellipse Width="7" Height="7" Fill="#ffb454" IsVisible="{Binding HasLocks}" VerticalAlignment="Center" ToolTip.Tip="Has parameter locks" />
+                <TextBlock Grid.Column="1" Text="{Binding ProbabilityText}" FontSize="10" Foreground="#ffd9a0" HorizontalAlignment="Right" />
+              </Grid>
+              <Grid Grid.Row="2" ColumnDefinitions="*,*" Height="5" Margin="-4,2,-4,0">
+                <Border Grid.Column="0" Background="#7be495" IsVisible="{Binding TieLeft}" />
+                <Border Grid.Column="1" Background="#7be495" IsVisible="{Binding TieRight}" />
+              </Grid>
+            </Grid>
+          </Border>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+
+    <!-- selected step details -->
+    <Border Classes="sub">
+      <Grid ColumnDefinitions="Auto,*,*" ColumnSpacing="16">
+        <StackPanel Spacing="2" MinWidth="90">
+          <TextBlock Text="{Binding SelectedStepTitle}" FontWeight="Bold" />
+          <TextBlock Text="{Binding SelectedStepProb}" Classes="caption" />
+          <TextBlock Text="right-click a step for the menu" Classes="caption" FontSize="10" />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Spacing="4">
+          <TextBlock Text="NOTES" Classes="caption" />
+          <ItemsControl ItemsSource="{Binding StepNotes}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:StepNoteRowViewModel">
+                <Border Background="#2f6fa8" CornerRadius="4" Padding="6,1" Margin="0,0,4,4">
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="{Binding Text}" FontSize="12" VerticalAlignment="Center" />
+                    <Button Classes="small" Padding="4,0" MinWidth="20" MinHeight="20" Content="&#x2715;" Command="{Binding DeleteCommand}" ToolTip.Tip="Delete note" />
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+        <StackPanel Grid.Column="2" Spacing="4">
+          <TextBlock Text="LOCKS" Classes="caption" />
+          <ItemsControl ItemsSource="{Binding StepLocks}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:StepLockRowViewModel">
+                <Border Background="#6b4a1a" CornerRadius="4" Padding="6,1" Margin="0,0,4,4">
+                  <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="{Binding Text}" FontSize="12" VerticalAlignment="Center" />
+                    <Button Classes="small" Padding="4,0" MinWidth="20" MinHeight="20" Content="&#x2715;" Command="{Binding DeleteCommand}" ToolTip.Tip="Delete lock" />
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <TextBlock Classes="caption" FontSize="10" TextWrapping="Wrap"
+                     Text="Hold a step and turn a knob to lock that value on the step. PRM REC records knob moves while playing." />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- track controls -->
+    <WrapPanel>
+      <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,14,6">
+        <TextBlock Text="LENGTH" Classes="caption" VerticalAlignment="Center" />
+        <NumericUpDown Value="{Binding SeqLengthValue}" Minimum="1" Maximum="64" Increment="1" FormatString="0" Width="100" />
+      </StackPanel>
+      <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,14,6">
+        <TextBlock Text="NOTE" Classes="caption" VerticalAlignment="Center" />
+        <ComboBox ItemsSource="{Binding StepNoteChoice.Options}" SelectedItem="{Binding StepNoteChoice.Selected}" MinWidth="86" MaxDropDownHeight="380" />
+      </StackPanel>
+      <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,14,6">
+        <TextBlock Text="RND STEP" Classes="caption" VerticalAlignment="Center" />
+        <ComboBox ItemsSource="{Binding RndStepChoice.Options}" SelectedItem="{Binding RndStepChoice.Selected}" MinWidth="76" />
+      </StackPanel>
+      <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,14,6">
+        <TextBlock Text="DUPLICATE" Classes="caption" VerticalAlignment="Center" Margin="0,0,2,0" />
+        <Button Classes="small" Content="&#x00D7;2" Command="{Binding DuplicateCommand}" CommandParameter="2" ToolTip.Tip="Double the length by copying the steps" />
+        <Button Classes="small" Content="&#x00D7;4" Command="{Binding DuplicateCommand}" CommandParameter="4" ToolTip.Tip="Quadruple the length by copying the steps" />
+      </StackPanel>
+      <Button Classes="small" Content="CLEAR NOTES" Command="{Binding ClearNotesCommand}" Margin="0,0,6,6" ToolTip.Tip="Remove all notes of this layer's track (locks stay)" />
+      <Button Classes="small" Content="CLEAR LOCKS" Command="{Binding ClearAllLocksCommand}" Margin="0,0,14,6" ToolTip.Tip="Remove all parameter locks of this layer's track" />
+      <ToggleButton Classes="small blue" Content="RND SEQ" IsChecked="{Binding RndSeqOn}" Margin="0,0,14,6" ToolTip.Tip="Randomized step playback (all layers)" />
+      <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,14,6">
+        <TextBlock Text="TRANSPOSE" Classes="caption" VerticalAlignment="Center" />
+        <NumericUpDown Value="{Binding TransposeValue}" Minimum="-12" Maximum="12" Increment="1" FormatString="+0;-0;0" Width="100" />
+      </StackPanel>
+      <ToggleButton Classes="small blue" Content="MUTE: SEQ" IsChecked="{Binding MuteSeq}" Margin="0,0,0,6"
+                    ToolTip.Tip="Mute mode. Off = SND: a muted layer is silent. On = SEQ: only the sequencer notes of a muted layer are muted (the keyboard still plays it)" />
+    </WrapPanel>
+  </StackPanel>
+</UserControl>
