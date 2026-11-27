@@ -26,6 +26,7 @@ public class Knob : Avalonia.Controls.Control
     public static readonly StyledProperty<bool> IsBipolarProperty = AvaloniaProperty.Register<Knob, bool>(nameof(IsBipolar));
     public static readonly StyledProperty<bool> IsLearningProperty = AvaloniaProperty.Register<Knob, bool>(nameof(IsLearning));
     public static readonly StyledProperty<string?> MidiTargetProperty = AvaloniaProperty.Register<Knob, string?>(nameof(MidiTarget));
+    public static readonly StyledProperty<double> ScaleProperty = AvaloniaProperty.Register<Knob, double>(nameof(Scale), 1.0);
     public static readonly StyledProperty<ICommand?> LearnCommandProperty = AvaloniaProperty.Register<Knob, ICommand?>(nameof(LearnCommand));
     public static readonly StyledProperty<ICommand?> ClearMappingCommandProperty = AvaloniaProperty.Register<Knob, ICommand?>(nameof(ClearMappingCommand));
 
@@ -43,7 +44,8 @@ public class Knob : Avalonia.Controls.Control
 
     static Knob()
     {
-        AffectsRender<Knob>(ValueProperty, MinimumProperty, MaximumProperty, LabelProperty, DisplayTextProperty,
+        AffectsMeasure<Knob>(ScaleProperty);
+        AffectsRender<Knob>(ScaleProperty, ValueProperty, MinimumProperty, MaximumProperty, LabelProperty, DisplayTextProperty,
             IsBipolarProperty, IsLearningProperty);
         FocusableProperty.OverrideDefaultValue<Knob>(true);
     }
@@ -67,6 +69,8 @@ public class Knob : Avalonia.Controls.Control
     public bool IsBipolar { get => GetValue(IsBipolarProperty); set => SetValue(IsBipolarProperty, value); }
     public bool IsLearning { get => GetValue(IsLearningProperty); set => SetValue(IsLearningProperty, value); }
     public string? MidiTarget { get => GetValue(MidiTargetProperty); set => SetValue(MidiTargetProperty, value); }
+    /// <summary>Size factor (1 = 76x104 px; mixer strips use a smaller variant).</summary>
+    public double Scale { get => GetValue(ScaleProperty); set => SetValue(ScaleProperty, value); }
     public ICommand? LearnCommand { get => GetValue(LearnCommandProperty); set => SetValue(LearnCommandProperty, value); }
     public ICommand? ClearMappingCommand { get => GetValue(ClearMappingCommandProperty); set => SetValue(ClearMappingCommandProperty, value); }
 
@@ -78,7 +82,7 @@ public class Knob : Avalonia.Controls.Control
     private double Range => Math.Max(1e-9, Maximum - Minimum);
     private void SetClamped(double v) => Value = Math.Clamp(v, Minimum, Maximum);
 
-    protected override Size MeasureOverride(Size availableSize) => new(76, 104);
+    protected override Size MeasureOverride(Size availableSize) => new(76 * Scale, 104 * Scale);
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
@@ -128,7 +132,13 @@ public class Knob : Avalonia.Controls.Control
 
     public override void Render(DrawingContext ctx)
     {
-        double w = Bounds.Width;
+        double scale = Scale;
+        using (ctx.PushTransform(Matrix.CreateScale(scale, scale)))
+            RenderUnscaled(ctx, Bounds.Width / scale);
+    }
+
+    private void RenderUnscaled(DrawingContext ctx, double w)
+    {
         var c = new Point(w / 2, 38);
         const double r = 26;
         double t = Math.Clamp((Value - Minimum) / Range, 0, 1);

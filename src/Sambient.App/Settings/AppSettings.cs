@@ -9,6 +9,8 @@ public sealed class AppSettings
     public bool KeyboardVisible { get; set; }
     /// <summary>Octave number of the first visible C on the on-screen keyboard (1..4; C3 = MIDI 48).</summary>
     public int KeyboardOctave { get; set; } = 3;
+    /// <summary>Launchkey MIDI channel 1..4 plays layer 1..4 (default off: notes go to the selected layer).</summary>
+    public bool MidiChannelToLayer { get; set; }
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 

@@ -59,4 +59,27 @@ public class MidiMapTests
         m.Clear("Cutoff");
         Assert.False(m.TryResolve(ControllerSource.Keys, 0, 74, out _));
     }
+
+    [Fact]
+    public void NewTargets_RoundTrip_AndOldFilesStillLoad()
+    {
+        var path = Tmp();
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        // a file written by M1 (no M2 targets)
+        File.WriteAllText(path, "{ \"version\": 1, \"bindings\": [ { \"source\": \"Any\", \"channel\": null, \"cc\": 21, \"target\": \"Harmonic\" } ] }");
+        var m = MidiMap.LoadOrCreate(path);
+        Assert.True(m.TryResolve(ControllerSource.Keys, 0, 21, out var t));
+        Assert.Equal("Harmonic", t);
+
+        m.Bind(MapSource.Any, null, 30, MidiTargets.ReverbSend);
+        m.Bind(MapSource.Any, null, 31, MidiTargets.ShimmerSend);
+        m.Bind(MapSource.Any, null, 32, MidiTargets.FxAmount);
+        m.Save(path);
+        var m2 = MidiMap.LoadOrCreate(path);
+        Assert.True(m2.TryResolve(ControllerSource.Daw, 0, 30, out t)); Assert.Equal("ReverbSend", t);
+        Assert.True(m2.TryResolve(ControllerSource.Daw, 0, 31, out t)); Assert.Equal("ShimmerSend", t);
+        Assert.True(m2.TryResolve(ControllerSource.Daw, 0, 32, out t)); Assert.Equal("FxAmount", t);
+        Assert.True(MidiTargets.IsLayerTarget("ReverbSend"));
+        Assert.False(MidiTargets.IsLayerTarget("ReverbMix"));
+    }
 }

@@ -25,6 +25,14 @@ public enum ParamId
     Velocity,
     /// <summary>Octave shift -3..+3 (integer).</summary>
     Octave,
+    /// <summary>Send to the REVERB bus 0..127 (post level, post pan).</summary>
+    ReverbSend,
+    /// <summary>Send to the SHIMMER bus 0..127 (post level, post pan).</summary>
+    ShimmerSend,
+    /// <summary>Layer mute, 0 or 1 (SND mode: silences the layer output including its sends).</summary>
+    Mute,
+    /// <summary>NOISE layer only: 0 = LOOP, 1 = SHOT (a <c>SamplePlayMode</c> value).</summary>
+    NoisePlayMode,
 }
 
 /// <summary>Global parameters.</summary>
@@ -34,6 +42,20 @@ public enum GlobalParamId
     MasterVolume,
     /// <summary>Pitch bend range in semitones (0..24).</summary>
     PitchBendRange,
+    /// <summary>Reverb algorithm, a <c>ReverbType</c> value (0 = Off .. 9).</summary>
+    ReverbType,
+    /// <summary>Reverb wet return level 0..127.</summary>
+    ReverbMix,
+    /// <summary>Master FX type, a <c>MasterFxType</c> value (0 = Off .. 6).</summary>
+    FxType,
+    /// <summary>FX SPEED 0..127.</summary>
+    FxSpeed,
+    /// <summary>FX AMOUNT 0..127.</summary>
+    FxAmount,
+    /// <summary>Tempo 40..250 BPM.</summary>
+    Bpm,
+    /// <summary>The layer (1..4) that the keyboards and layer-parameter controls address.</summary>
+    SelectedLayer,
 }
 
 public enum FilterType { Off = 0, LowPass = 1, HighPass = 2, BandPass = 3 }
@@ -59,16 +81,30 @@ public static class ParamTable
         new(-63, 63, 0, false),     // Pan
         new(1, 127, 100, false),    // Velocity
         new(-3, 3, 0, true),        // Octave
+        new(0, 127, 0, false),      // ReverbSend
+        new(0, 127, 0, false),      // ShimmerSend
+        new(0, 1, 0, true),         // Mute
+        new(0, 1, 0, true),         // NoisePlayMode
     ];
 
     private static readonly ParamInfo[] Global =
     [
         new(0, 127, 63.5f, false),  // MasterVolume
         new(0, 24, 2, true),        // PitchBendRange
+        new(0, 9, 5, true),         // ReverbType (LargeM)
+        new(0, 127, 64, false),     // ReverbMix
+        new(0, 6, 0, true),         // FxType (Off)
+        new(0, 127, 64, false),     // FxSpeed
+        new(0, 127, 0, false),      // FxAmount
+        new(40, 250, 90, true),     // Bpm
+        new(1, 4, 1, true),         // SelectedLayer
     ];
 
     public static ParamInfo Get(ParamId id) => Layer[(int)id];
     public static ParamInfo Get(GlobalParamId id) => Global[(int)id];
+
+    /// <summary>Highest WAVE value of a layer: 32 wavetables on synth layers, 8 sample slots on the NOISE layer.</summary>
+    public static int MaxWave(int layer) => layer == ParameterStore.NoiseLayerIndex ? 8 : 32;
 
     public static float Clamp(ParamId id, float v)
     {
@@ -95,6 +131,8 @@ public static class ParamTable
 public sealed class ParameterStore
 {
     public const int MaxLayers = 4;
+    /// <summary>Index (0-based) of the NOISE layer (layer 4).</summary>
+    public const int NoiseLayerIndex = 3;
 
     private readonly float[] _layer = new float[MaxLayers * ParamTable.LayerParamCount];
     private readonly float[] _global = new float[ParamTable.GlobalParamCount];
@@ -116,6 +154,7 @@ public sealed class ParameterStore
     public float Set(int layer, ParamId id, float value)
     {
         value = ParamTable.Clamp(id, value);
+        if (id == ParamId.Wave) value = Math.Min(value, ParamTable.MaxWave(layer));
         Volatile.Write(ref _layer[Index(layer, id)], value);
         return value;
     }

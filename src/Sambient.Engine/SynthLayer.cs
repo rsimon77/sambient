@@ -18,7 +18,7 @@ namespace Sambient.Engine;
 ///
 /// Mod wheel (TEMPORARY, until LFO/MOD exist in later milestones): adds 0..+48 to HARMONIC (clamped to 127).
 /// </summary>
-public sealed class SynthLayer
+public sealed class SynthLayer : ILayer
 {
     public const int VoiceCount = 16;
     public const int SubBlock = 32;

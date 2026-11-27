@@ -1,3 +1,4 @@
+using Sambient.Dsp.Effects;
 using Sambient.Dsp.Wavetables;
 using Sambient.Engine;
 
@@ -16,6 +17,7 @@ for (int i = 0; i < args.Length; i++)
 }
 
 if (demoPath != null) return RunEngineDemo(demoPath);
+if (opts.TryGetValue("fx-demo", out var fxDemoPath)) return FxDemo.Run(fxDemoPath);
 
 if (list)
 {
@@ -50,42 +52,48 @@ return 0;
 
 static void Usage() => Console.Error.WriteLine("Usage: WaveDump --list | --wave <n> --out <file.wav> [--note 48] [--seconds 8] | --engine-demo <out.wav>");
 
-// Offline AudioEngine render (no audio device): chords on several WAVEs, HARMONIC and CUTOFF sweeps, sustain pedal, mod wheel.
+// Offline AudioEngine render (no audio device): all four layers (drone, pad, bell, noise), reverb with shimmer sends and a
+// master FX, driven by a small script. ~30 s. The reverb / FX are silent / passthrough while their DSP is still a stub.
 static int RunEngineDemo(string path)
 {
     const int fs = 48000, block = 256;
-    const double seconds = 20.0;
-    var engine = new AudioEngine(fs);
-    Task.WaitAll(new[] { 1, 2, 3, 8, 11, 25 }.Select(engine.Bank.EnsureBuiltAsync).ToArray());
+    const double seconds = 30.0;
+    var parameters = new ParameterStore();
+    DefaultPatch.Apply(parameters);
+    var engine = new AudioEngine(fs, parameters);
+    Task.WaitAll(new[] { 3, 8, 25 }.Select(engine.Bank.EnsureBuiltAsync).Append(engine.Noise.EnsureBuiltAsync(1)).ToArray());
 
     var events = new List<(double t, Action a)>();
     void At(double t, Action a) => events.Add((t, a));
-    void P(ParamId id, float v) => engine.SetParam(0, id, v);
-    void On(double t, params int[] notes) => At(t, () => { foreach (var n in notes) engine.NoteOn(0, n, 90); });
-    void Off(double t, params int[] notes) => At(t, () => { foreach (var n in notes) engine.NoteOff(0, n); });
+    void On(double t, int layer, int vel, params int[] notes) => At(t, () => { foreach (var n in notes) engine.NoteOn(layer, n, vel); });
+    void Off(double t, int layer, params int[] notes) => At(t, () => { foreach (var n in notes) engine.NoteOff(layer, n); });
 
-    // 0-6 s: SIN.S pad, C minor, slow attack
-    At(0, () => { P(ParamId.Wave, 3); P(ParamId.Harmonic, 40); P(ParamId.Attack, 85); P(ParamId.Release, 90); P(ParamId.Cutoff, 80); });
-    On(0.0, 48, 55, 58, 63);
-    Off(5.0, 48, 55, 58, 63);
-    // 4-10 s: SAW.S, F major, HARMONIC sweep 0 -> 127 (script below)
-    At(4.0, () => { P(ParamId.Wave, 1); P(ParamId.Harmonic, 0); P(ParamId.Cutoff, 70); });
-    On(4.0, 41, 53, 60, 65);
-    Off(9.0, 41, 53, 60, 65);
-    // 8-13 s: EV.OD, Bb, cutoff sweep with resonance
-    At(8.0, () => { P(ParamId.Wave, 8); P(ParamId.Harmonic, 20); P(ParamId.Resonance, 70); });
-    On(8.0, 46, 53, 58, 62);
-    // sustain pedal: pedal down at 10.5, notes released at 11, pedal up at 14
-    At(10.5, () => engine.Sustain(true));
-    Off(11.0, 46, 53, 58, 62);
-    At(14.0, () => engine.Sustain(false));
-    // 13-18 s: SIN.F and FM.PF with mod wheel
-    At(13.0, () => { P(ParamId.Wave, 11); P(ParamId.Harmonic, 30); P(ParamId.Resonance, 30); P(ParamId.Cutoff, 100); });
-    On(13.0, 36, 48, 55, 60);
-    At(15.0, () => { P(ParamId.Wave, 25); engine.ModWheel(0.6f); });
-    On(15.0, 67);
-    At(17.0, () => engine.ModWheel(0f));
-    Off(17.5, 36, 48, 55, 60, 67);
+    // L4 NOISE: RAIN loop (or white noise only while the sample bank is a stub) held for the whole piece
+    On(0.0, 3, 80, 60);
+    Off(27.0, 3, 60);
+    // L1 DRONE: SIN.S, C2 + G2
+    On(0.5, 0, 90, 36, 43);
+    Off(17.0, 0, 36, 43);
+    On(17.5, 0, 90, 32, 39);                  // Ab1 + Eb2
+    Off(27.0, 0, 32, 39);
+    // L2 PAD: EV.OD, Cm -> Ab, shimmer builds up
+    On(3.0, 1, 85, 60, 63, 67);
+    Off(15.0, 1, 60, 63, 67);
+    On(15.5, 1, 85, 56, 60, 63);
+    Off(26.0, 1, 56, 60, 63);
+    // L3 BELL: FM.PF, sparse notes
+    double[] bellTimes = { 6, 8.5, 11, 12.5, 16, 18.5, 20, 22.5, 24 };
+    int[] bell = { 84, 79, 75, 82, 80, 75, 84, 87, 79 };
+    for (int i = 0; i < bellTimes.Length; i++)
+    {
+        On(bellTimes[i], 2, 70 + (i % 3) * 12, bell[i]);
+        Off(bellTimes[i] + 0.6, 2, bell[i]);
+    }
+    // global: master FX and reverb changes
+    At(12.0, () => engine.SetGlobal(GlobalParamId.FxAmount, 60));
+    At(20.0, () => { engine.SetGlobal(GlobalParamId.ReverbType, (float)ReverbType.InfinityM); engine.SetGlobal(GlobalParamId.ReverbMix, 90); });
+    At(22.0, () => { engine.SetGlobal(GlobalParamId.FxType, (float)MasterFxType.Chorus); engine.SetGlobal(GlobalParamId.FxSpeed, 40); engine.SetGlobal(GlobalParamId.FxAmount, 50); });
+    At(26.0, () => engine.SetGlobal(GlobalParamId.FxType, (float)MasterFxType.TapeDelay));
     events.Sort((a, b) => a.t.CompareTo(b.t));
 
     int total = (int)(seconds * fs);
@@ -93,20 +101,23 @@ static int RunEngineDemo(string path)
     var buf = new float[block * 2];
     int next = 0, maxVoices = 0;
     float peak = 0f;
+    double sumSq = 0;
     for (int pos = 0; pos < total; pos += block)
     {
         double t = (double)pos / fs;
         while (next < events.Count && events[next].t <= t) events[next++].a();
-        // continuous sweeps
-        if (t >= 4 && t < 10) engine.SetParam(0, ParamId.Harmonic, (float)(127.0 * (t - 4) / 6.0));
-        if (t >= 8 && t < 13) engine.SetParam(0, ParamId.Cutoff, (float)(30 + 97 * (t - 8) / 5.0));
+        // continuous sweeps: pad shimmer send 35 -> 100 (10-20 s), drone cutoff opening 70 -> 100 (0-15 s)
+        if (t >= 10 && t < 20) engine.SetParam(1, ParamId.ShimmerSend, (float)(35 + 65 * (t - 10) / 10.0));
+        if (t < 15) engine.SetParam(0, ParamId.Cutoff, (float)(70 + 30 * t / 15.0));
         int n = Math.Min(block, total - pos);
         engine.Render(buf, n);
         maxVoices = Math.Max(maxVoices, engine.ActiveVoices);
-        for (int i = 0; i < n * 2; i++) { all[pos * 2 + i] = buf[i]; peak = Math.Max(peak, Math.Abs(buf[i])); }
+        for (int i = 0; i < n * 2; i++) { all[pos * 2 + i] = buf[i]; peak = Math.Max(peak, Math.Abs(buf[i])); sumSq += (double)buf[i] * buf[i]; }
     }
     WriteWav16Stereo(path, all, fs);
-    Console.WriteLine($"Engine demo: {seconds:F0} s, peak {peak:F3} ({20 * Math.Log10(Math.Max(peak, 1e-9)):F1} dBFS), max voices {maxVoices}, dropped events {engine.DroppedEvents} -> {path}");
+    double rms = Math.Sqrt(sumSq / all.Length);
+    Console.WriteLine($"Engine demo: {seconds:F0} s, 4 layers, peak {peak:F3} ({20 * Math.Log10(Math.Max(peak, 1e-9)):F1} dBFS), "
+                      + $"RMS {20 * Math.Log10(Math.Max(rms, 1e-9)):F1} dBFS, max voices {maxVoices}, dropped events {engine.DroppedEvents} -> {path}");
     return 0;
 }
 

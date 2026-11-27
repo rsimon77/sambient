@@ -28,7 +28,7 @@ public struct SmoothedValue
     /// <summary>Starts a ramp from the current value to <paramref name="target"/>.</summary>
     public void SetTarget(float target)
     {
-        if (target == _target && _remaining == 0) return;
+        if (target == _target) return;     // same target: let a running ramp finish instead of restarting it every block
         _target = target;
         _remaining = _rampSamples;
         _step = (target - _current) / _rampSamples;

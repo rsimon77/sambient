@@ -14,8 +14,10 @@ public sealed partial class ParamKnobViewModel : ObservableObject
     private readonly Action<double> _apply;
     private double _pending;
     private int _dirty;
+    private bool _loading;
 
-    public string Label { get; }
+    /// <summary>Display label (may change at run time, e.g. FX SPEED -> TIME).</summary>
+    [ObservableProperty] private string _label;
     /// <summary>Parameter id used by the MIDI map (enum name, e.g. "Cutoff").</summary>
     public string MidiTarget { get; }
     public double Minimum { get; }
@@ -30,18 +32,27 @@ public sealed partial class ParamKnobViewModel : ObservableObject
     [ObservableProperty] private bool _isLearning;
 
     public ParamKnobViewModel(string label, string midiTarget, double min, double max, double def, bool bipolar,
-        Func<double, string> format, Action<double> apply)
+        Func<double, string> format, Action<double> apply, double? initial = null)
     {
-        Label = label; MidiTarget = midiTarget; Minimum = min; Maximum = max; DefaultValue = def; IsBipolar = bipolar;
+        _label = label; MidiTarget = midiTarget; Minimum = min; Maximum = max; DefaultValue = def; IsBipolar = bipolar;
         _format = format; _apply = apply;
-        _value = def;
-        _displayText = format(def);
+        _value = initial ?? def;
+        _displayText = format(_value);
     }
 
     partial void OnValueChanged(double value)
     {
-        _apply(value);
+        if (!_loading) _apply(value);
         DisplayText = _format(value);
+    }
+
+    /// <summary>Shows <paramref name="value"/> without writing it to the engine (the engine already holds it, e.g. after a layer switch).</summary>
+    public void Load(double value)
+    {
+        _loading = true;
+        try { Value = Math.Clamp(value, Minimum, Maximum); }
+        finally { _loading = false; }
+        DisplayText = _format(Value);
     }
 
     public void RefreshDisplay() => DisplayText = _format(Value);
@@ -72,3 +83,9 @@ public sealed record WaveOption(int Index, string Name, bool IsAvailable)
 }
 
 public sealed record FilterOption(Sambient.Engine.FilterType Type, string Text);
+
+public sealed record PlayModeOption(Sambient.Dsp.Noise.SamplePlayMode Mode, string Text);
+
+public sealed record ReverbOption(Sambient.Dsp.Effects.ReverbType Type, string Text);
+
+public sealed record FxOption(Sambient.Dsp.Effects.MasterFxType Type, string Text, string SpeedLabel, string AmountLabel);

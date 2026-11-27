@@ -79,4 +79,7 @@ public static class ParamCurves
 
     /// <summary>Unison detune 0 .. 20 cents, linear.</summary>
     public static float UnisonDetuneCents(float v) => 20f * Norm(v);
+
+    /// <summary>Effect send gain, linear: 0 -> 0, 127 -> 1.0.</summary>
+    public static float SendGain(float v) => Norm(v);
 }

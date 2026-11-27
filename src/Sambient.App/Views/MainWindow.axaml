@@ -5,11 +5,40 @@
         xmlns:c="using:Sambient.App.Controls"
         x:Class="Sambient.App.Views.MainWindow"
         x:DataType="vm:MainViewModel"
-        Title="Sambient" Width="940" Height="700" MinWidth="780" MinHeight="560">
+        Title="Sambient" Width="1100" Height="800" MinWidth="860" MinHeight="560">
+  <Window.Styles>
+    <Style Selector="Button.select">
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+      <Setter Property="FontWeight" Value="Bold" />
+      <Setter Property="Background" Value="#2b2f38" />
+    </Style>
+    <Style Selector="Button.select.selected">
+      <Setter Property="Background" Value="#b3261e" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.select.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#c9352c" />
+    </Style>
+    <Style Selector="ToggleButton.mute:checked /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#ffb454" />
+      <Setter Property="Foreground" Value="#16181d" />
+    </Style>
+    <Style Selector="Border.strip">
+      <Setter Property="Background" Value="#252932" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="BorderBrush" Value="#2a2e37" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Padding" Value="8" />
+    </Style>
+    <Style Selector="Border.strip.selected">
+      <Setter Property="BorderBrush" Value="#b3261e" />
+    </Style>
+  </Window.Styles>
   <Grid RowDefinitions="Auto,*,Auto,Auto" Margin="16">
 
     <!-- Header -->
-    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,0,0,12">
+    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" Margin="0,0,0,12">
       <TextBlock Grid.Column="0" Text="SAMBIENT" FontSize="20" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,24,0" />
       <ComboBox Grid.Column="1" ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"
                 HorizontalAlignment="Left" MinWidth="260" VerticalAlignment="Center">
@@ -20,78 +49,188 @@
         </ComboBox.ItemTemplate>
       </ComboBox>
       <ToggleButton Grid.Column="2" Content="Keyboard" IsChecked="{Binding KeyboardVisible}" Margin="0,0,16,0" VerticalAlignment="Center" />
-      <c:Knob Grid.Column="4" Label="{Binding MasterKnob.Label}" Value="{Binding MasterKnob.Value, Mode=TwoWay}"
+      <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6" Margin="0,0,16,0" VerticalAlignment="Center">
+        <TextBlock Text="BPM" Classes="caption" VerticalAlignment="Center" />
+        <NumericUpDown Value="{Binding Bpm}" Minimum="40" Maximum="250" Increment="1" FormatString="0" Width="110" />
+      </StackPanel>
+      <c:Knob Grid.Column="5" Label="{Binding MasterKnob.Label}" Value="{Binding MasterKnob.Value, Mode=TwoWay}"
               Minimum="{Binding MasterKnob.Minimum}" Maximum="{Binding MasterKnob.Maximum}"
               DefaultValue="{Binding MasterKnob.DefaultValue}" DisplayText="{Binding MasterKnob.DisplayText}"
               IsLearning="{Binding MasterKnob.IsLearning}" MidiTarget="{Binding MasterKnob.MidiTarget}"
               LearnCommand="{Binding MasterKnob.LearnCommand}" ClearMappingCommand="{Binding MasterKnob.ClearMappingCommand}" />
     </Grid>
 
-    <!-- Layer 1 -->
-    <Border Grid.Row="1" Classes="panel" VerticalAlignment="Top">
-      <StackPanel Spacing="14">
-        <Grid ColumnDefinitions="Auto,*">
-          <TextBlock Grid.Column="0" Text="LAYER 1" FontWeight="Bold" FontSize="14" VerticalAlignment="Center" />
-          <TextBlock Grid.Column="1" Text="{Binding MidiLearnStatus}" Classes="caption" HorizontalAlignment="Right" VerticalAlignment="Center" />
-        </Grid>
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Spacing="12" Margin="0,0,10,0">
 
-        <Grid ColumnDefinitions="Auto,16,*">
-          <StackPanel Grid.Column="0" Spacing="8" Width="260">
-            <TextBlock Text="WAVE" Classes="caption" />
-            <ComboBox ItemsSource="{Binding Waves}" SelectedItem="{Binding SelectedWave}" HorizontalAlignment="Stretch" MaxDropDownHeight="420">
-              <ComboBox.Styles>
-                <Style Selector="ComboBoxItem">
-                  <Setter Property="IsEnabled" Value="{ReflectionBinding IsAvailable}" />
-                </Style>
-              </ComboBox.Styles>
-              <ComboBox.ItemTemplate>
-                <DataTemplate x:DataType="vm:WaveOption">
-                  <TextBlock Text="{Binding Text}" Opacity="{Binding Opacity}" />
-                </DataTemplate>
-              </ComboBox.ItemTemplate>
-            </ComboBox>
-            <c:WavePreview Height="96" Table="{Binding PreviewTable}" Harmonic="{Binding PreviewHarmonic}"
-                           IsBuilding="{Binding PreviewBuilding}" />
-            <Grid ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,6,0,0">
-              <ComboBox Grid.Column="0" ItemsSource="{Binding Filters}" SelectedItem="{Binding SelectedFilter}" MinWidth="90">
-                <ComboBox.ItemTemplate>
-                  <DataTemplate x:DataType="vm:FilterOption">
-                    <TextBlock Text="{Binding Text}" />
+        <!-- Mixer row: 4 layer strips -->
+        <ItemsControl ItemsSource="{Binding Strips}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <UniformGrid Rows="1" />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:LayerStripViewModel">
+              <Border Classes="strip" Classes.selected="{Binding IsSelected}" Margin="3,0">
+                <StackPanel Spacing="6">
+                  <Grid ColumnDefinitions="*,Auto">
+                    <Button Grid.Column="0" Classes="select" Classes.selected="{Binding IsSelected}" Content="{Binding Title}"
+                            Command="{Binding SelectCommand}" />
+                    <ToggleButton Grid.Column="1" Classes="mute" Content="M" IsChecked="{Binding IsMuted}" Margin="6,0,0,0"
+                                  MinWidth="34" HorizontalContentAlignment="Center" />
+                  </Grid>
+                  <TextBlock Text="{Binding WaveText}" Classes="caption" HorizontalAlignment="Center" />
+                  <ItemsControl ItemsSource="{Binding Knobs}" HorizontalAlignment="Center">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:ParamKnobViewModel">
+                        <c:Knob Scale="0.72" Label="{Binding Label}" Value="{Binding Value, Mode=TwoWay}" Minimum="{Binding Minimum}"
+                                Maximum="{Binding Maximum}" DefaultValue="{Binding DefaultValue}" DisplayText="{Binding DisplayText}"
+                                IsBipolar="{Binding IsBipolar}" IsLearning="{Binding IsLearning}" MidiTarget="{Binding MidiTarget}"
+                                LearnCommand="{Binding LearnCommand}" ClearMappingCommand="{Binding ClearMappingCommand}"
+                                Margin="1,0" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- Layer editor (selected layer) -->
+        <Border Classes="panel">
+          <StackPanel Spacing="14">
+            <Grid ColumnDefinitions="Auto,*">
+              <TextBlock Grid.Column="0" Text="{Binding LayerTitle}" FontWeight="Bold" FontSize="14" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="1" Text="{Binding MidiLearnStatus}" Classes="caption" HorizontalAlignment="Right" VerticalAlignment="Center" />
+            </Grid>
+
+            <Grid ColumnDefinitions="Auto,16,*">
+              <StackPanel Grid.Column="0" Spacing="8" Width="260">
+                <TextBlock Text="WAVE" Classes="caption" />
+                <ComboBox ItemsSource="{Binding Waves}" SelectedItem="{Binding SelectedWave}" HorizontalAlignment="Stretch" MaxDropDownHeight="420">
+                  <ComboBox.Styles>
+                    <Style Selector="ComboBoxItem">
+                      <Setter Property="IsEnabled" Value="{ReflectionBinding IsAvailable}" />
+                    </Style>
+                  </ComboBox.Styles>
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:WaveOption">
+                      <TextBlock Text="{Binding Text}" Opacity="{Binding Opacity}" />
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <c:WavePreview Height="96" Table="{Binding PreviewTable}" Harmonic="{Binding PreviewHarmonic}"
+                               Sample="{Binding PreviewSample}" IsSampleMode="{Binding IsNoiseLayer}"
+                               IsBuilding="{Binding PreviewBuilding}" />
+                <StackPanel IsVisible="{Binding IsNoiseLayer}" Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="PLAY" Classes="caption" VerticalAlignment="Center" />
+                  <ComboBox ItemsSource="{Binding PlayModes}" SelectedItem="{Binding SelectedPlayMode}" MinWidth="100">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:PlayModeOption">
+                        <TextBlock Text="{Binding Text}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                </StackPanel>
+                <Grid ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,6,0,0">
+                  <ComboBox Grid.Column="0" ItemsSource="{Binding Filters}" SelectedItem="{Binding SelectedFilter}" MinWidth="90">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:FilterOption">
+                        <TextBlock Text="{Binding Text}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                  <Button Grid.Column="1" Classes="small" Content="−" Command="{Binding OctaveDownCommand}" Margin="12,0,0,0" />
+                  <TextBlock Grid.Column="2" Text="{Binding OctaveText}" VerticalAlignment="Center" Margin="8,0" MinWidth="64" TextAlignment="Center" />
+                  <Button Grid.Column="3" Classes="small" Content="+" Command="{Binding OctaveUpCommand}" />
+                </Grid>
+              </StackPanel>
+
+              <ItemsControl Grid.Column="2" ItemsSource="{Binding LayerKnobs}" VerticalAlignment="Top">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <WrapPanel />
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:ParamKnobViewModel">
+                    <c:Knob Label="{Binding Label}" Value="{Binding Value, Mode=TwoWay}" Minimum="{Binding Minimum}"
+                            Maximum="{Binding Maximum}" DefaultValue="{Binding DefaultValue}" DisplayText="{Binding DisplayText}"
+                            IsBipolar="{Binding IsBipolar}" IsLearning="{Binding IsLearning}" MidiTarget="{Binding MidiTarget}"
+                            LearnCommand="{Binding LearnCommand}" ClearMappingCommand="{Binding ClearMappingCommand}"
+                            Margin="2,0" />
                   </DataTemplate>
-                </ComboBox.ItemTemplate>
-              </ComboBox>
-              <Button Grid.Column="1" Classes="small" Content="−" Command="{Binding OctaveDownCommand}" Margin="12,0,0,0" />
-              <TextBlock Grid.Column="2" Text="{Binding OctaveText}" VerticalAlignment="Center" Margin="8,0" MinWidth="64" TextAlignment="Center" />
-              <Button Grid.Column="3" Classes="small" Content="+" Command="{Binding OctaveUpCommand}" />
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
             </Grid>
           </StackPanel>
+        </Border>
 
-          <ItemsControl Grid.Column="2" ItemsSource="{Binding LayerKnobs}" VerticalAlignment="Top">
-            <ItemsControl.ItemsPanel>
-              <ItemsPanelTemplate>
-                <WrapPanel />
-              </ItemsPanelTemplate>
-            </ItemsControl.ItemsPanel>
-            <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="vm:ParamKnobViewModel">
-                <c:Knob Label="{Binding Label}" Value="{Binding Value, Mode=TwoWay}" Minimum="{Binding Minimum}"
-                        Maximum="{Binding Maximum}" DefaultValue="{Binding DefaultValue}" DisplayText="{Binding DisplayText}"
-                        IsBipolar="{Binding IsBipolar}" IsLearning="{Binding IsLearning}" MidiTarget="{Binding MidiTarget}"
-                        LearnCommand="{Binding LearnCommand}" ClearMappingCommand="{Binding ClearMappingCommand}"
-                        Margin="2,0" />
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
+        <!-- Effects -->
+        <Grid ColumnDefinitions="*,12,2*">
+          <Border Grid.Column="0" Classes="panel">
+            <StackPanel Spacing="8">
+              <TextBlock Text="REVERB" FontWeight="Bold" FontSize="14" />
+              <Grid ColumnDefinitions="*,Auto">
+                <ComboBox Grid.Column="0" ItemsSource="{Binding ReverbTypes}" SelectedItem="{Binding SelectedReverb}"
+                          HorizontalAlignment="Stretch" VerticalAlignment="Top" Margin="0,0,12,0" MaxDropDownHeight="360">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ReverbOption">
+                      <TextBlock Text="{Binding Text}" />
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <c:Knob Grid.Column="1" Label="{Binding ReverbMixKnob.Label}" Value="{Binding ReverbMixKnob.Value, Mode=TwoWay}"
+                        Minimum="{Binding ReverbMixKnob.Minimum}" Maximum="{Binding ReverbMixKnob.Maximum}"
+                        DefaultValue="{Binding ReverbMixKnob.DefaultValue}" DisplayText="{Binding ReverbMixKnob.DisplayText}"
+                        IsLearning="{Binding ReverbMixKnob.IsLearning}" MidiTarget="{Binding ReverbMixKnob.MidiTarget}"
+                        LearnCommand="{Binding ReverbMixKnob.LearnCommand}" ClearMappingCommand="{Binding ReverbMixKnob.ClearMappingCommand}" />
+              </Grid>
+            </StackPanel>
+          </Border>
+          <Border Grid.Column="2" Classes="panel">
+            <StackPanel Spacing="8">
+              <TextBlock Text="MASTER FX" FontWeight="Bold" FontSize="14" />
+              <Grid ColumnDefinitions="*,Auto,Auto">
+                <ComboBox Grid.Column="0" ItemsSource="{Binding FxTypes}" SelectedItem="{Binding SelectedFx}"
+                          HorizontalAlignment="Stretch" VerticalAlignment="Top" Margin="0,0,12,0" MaxDropDownHeight="360">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:FxOption">
+                      <TextBlock Text="{Binding Text}" />
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <c:Knob Grid.Column="1" Label="{Binding FxSpeedKnob.Label}" Value="{Binding FxSpeedKnob.Value, Mode=TwoWay}"
+                        Minimum="{Binding FxSpeedKnob.Minimum}" Maximum="{Binding FxSpeedKnob.Maximum}"
+                        DefaultValue="{Binding FxSpeedKnob.DefaultValue}" DisplayText="{Binding FxSpeedKnob.DisplayText}"
+                        IsLearning="{Binding FxSpeedKnob.IsLearning}" MidiTarget="{Binding FxSpeedKnob.MidiTarget}"
+                        LearnCommand="{Binding FxSpeedKnob.LearnCommand}" ClearMappingCommand="{Binding FxSpeedKnob.ClearMappingCommand}" />
+                <c:Knob Grid.Column="2" Label="{Binding FxAmountKnob.Label}" Value="{Binding FxAmountKnob.Value, Mode=TwoWay}"
+                        Minimum="{Binding FxAmountKnob.Minimum}" Maximum="{Binding FxAmountKnob.Maximum}"
+                        DefaultValue="{Binding FxAmountKnob.DefaultValue}" DisplayText="{Binding FxAmountKnob.DisplayText}"
+                        IsLearning="{Binding FxAmountKnob.IsLearning}" MidiTarget="{Binding FxAmountKnob.MidiTarget}"
+                        LearnCommand="{Binding FxAmountKnob.LearnCommand}" ClearMappingCommand="{Binding FxAmountKnob.ClearMappingCommand}" />
+              </Grid>
+            </StackPanel>
+          </Border>
         </Grid>
 
-        <Expander Header="MIDI / Launchkey" Margin="0,4,0,0">
-          <StackPanel Spacing="4">
+        <Expander Header="MIDI / Launchkey">
+          <StackPanel Spacing="6">
             <TextBlock Text="{Binding LaunchkeyStatus}" />
+            <CheckBox IsChecked="{Binding MidiChannelToLayer}" Content="Launchkey MIDI channel 1–4 plays layer 1–4 (off: notes go to the selected layer)" />
             <ItemsControl ItemsSource="{Binding MidiPorts}" Opacity="0.7" />
           </StackPanel>
         </Expander>
       </StackPanel>
-    </Border>
+    </ScrollViewer>
 
     <!-- On-screen keyboard (optional) -->
     <Border Grid.Row="2" Classes="panel" Margin="0,12,0,0" IsVisible="{Binding KeyboardVisible}">

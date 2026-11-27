@@ -1,24 +1,56 @@
 using Sambient.Audio;
+using Sambient.Dsp.Effects;
+using Sambient.Dsp.Noise;
 using Sambient.Dsp.Params;
 using Sambient.Dsp.Wavetables;
 
 namespace Sambient.Engine;
 
 /// <summary>
-/// The M1 synth engine: ParameterStore + lock-free event queue + 1 SynthLayer (layer index 0; the array is ready for
-/// 3 synth layers + a noise layer), master volume and a safety soft clipper. <see cref="Render"/> never allocates, locks
-/// or blocks. All public setters are safe from any thread. To change the sample rate create a new engine (non-RT) and
-/// share the ParameterStore / WavetableBank with it.
+/// The M2 engine: ParameterStore + lock-free event queue + 4 layers (3 <see cref="SynthLayer"/> + the
+/// <see cref="NoiseLayer"/>), a mixer, a shimmer reverb on send buses, a master FX insert, master volume and a safety
+/// soft clipper. <see cref="Render"/> never allocates, locks or blocks. All public setters are safe from any thread.
+///
+/// Signal flow per block: every layer renders stereo (after its own level/pan) into a scratch buffer; mute gain, then
+/// (a) the dry bus, (b) the reverb-send bus x ReverbSend and (c) the shimmer-send bus x ShimmerSend (sends are post-level,
+/// post-pan) -> ShimmerReverb.Process(send buses) -> wet; mix = dry + wet -> MasterFx.Process (master insert, after the
+/// reverb) -> master volume (smoothed) -> soft clipper.
+///
+/// To change the sample rate create a new engine (non-RT) and share the ParameterStore / WavetableBank / NoiseBank with it;
+/// effect instances are created per engine.
 /// </summary>
 public sealed class AudioEngine : IAudioCallback
 {
-    public const int SynthLayerCount = 1;
+    public const int SynthLayerCount = 3;
+    public const int NoiseLayerIndex = ParameterStore.NoiseLayerIndex;
+    public const int LayerCount = 4;
+    /// <summary>Largest block processed in one go (longer callbacks are split); all bus buffers are sized for it.</summary>
+    public const int MaxBlock = 4096;
     /// <summary>Soft clipper knee (-3 dBFS); output never exceeds 1.0.</summary>
     public const float ClipKnee = 0.7079458f;
     private const float PeakDecayPerBlock = 0.9f;
 
-    private readonly SynthLayer[] _layers = new SynthLayer[SynthLayerCount];
+    private readonly ILayer[] _layers = new ILayer[LayerCount];
+    private readonly SynthLayer[] _synthLayers = new SynthLayer[SynthLayerCount];
+    private readonly NoiseLayer _noiseLayer;
+    private readonly ShimmerReverb _reverb;
+    private readonly MasterFx _fx;
     private SmoothedValue _master;
+    private readonly SmoothedValue[] _mute = new SmoothedValue[LayerCount];
+    private readonly SmoothedValue[] _revSend = new SmoothedValue[LayerCount];
+    private readonly SmoothedValue[] _shimSend = new SmoothedValue[LayerCount];
+
+    // preallocated per-block buffers (max block)
+    private readonly float[] _layerBuf = new float[MaxBlock * 2];
+    private readonly float[] _dryL = new float[MaxBlock], _dryR = new float[MaxBlock];
+    private readonly float[] _revInL = new float[MaxBlock], _revInR = new float[MaxBlock];
+    private readonly float[] _shimInL = new float[MaxBlock], _shimInR = new float[MaxBlock];
+    private readonly float[] _wetL = new float[MaxBlock], _wetR = new float[MaxBlock];
+
+    // last applied global effect settings (apply only on change)
+    private int _lastReverbType = -1, _lastFxType = -1;
+    private float _lastReverbMix = float.NaN, _lastFxSpeed = float.NaN, _lastFxAmount = float.NaN, _lastBpm = float.NaN;
+
     private float _peakL, _peakR;                 // audio thread running peaks (with decay)
     private float _pubPeakL, _pubPeakR;           // published (Volatile)
     private int _pubVoices;
@@ -26,21 +58,36 @@ public sealed class AudioEngine : IAudioCallback
     public int SampleRate { get; }
     public ParameterStore Parameters { get; }
     public WavetableBank Bank { get; }
+    public NoiseBank Noise { get; }
     public EngineEventQueue Events { get; }
 
-    public AudioEngine(int sampleRate, ParameterStore? parameters = null, WavetableBank? bank = null)
+    public AudioEngine(int sampleRate, ParameterStore? parameters = null, WavetableBank? bank = null, NoiseBank? noise = null)
     {
         SampleRate = sampleRate;
         Parameters = parameters ?? new ParameterStore();
         Bank = bank ?? new WavetableBank();
+        Noise = noise ?? new NoiseBank();
         Events = new EngineEventQueue(1024);
-        for (int i = 0; i < _layers.Length; i++)
+        for (int i = 0; i < SynthLayerCount; i++)
         {
             Bank.EnsureBuiltAsync((int)Parameters.Get(i, ParamId.Wave));
-            _layers[i] = new SynthLayer(i, sampleRate, Parameters, Bank);
+            _synthLayers[i] = new SynthLayer(i, sampleRate, Parameters, Bank);
+            _layers[i] = _synthLayers[i];
         }
         Bank.EnsureBuiltAsync(WavetableBank.FallbackIndex);
+        Noise.EnsureBuiltAsync((int)Parameters.Get(NoiseLayerIndex, ParamId.Wave));
+        _noiseLayer = new NoiseLayer(NoiseLayerIndex, sampleRate, Parameters, Noise);
+        _layers[NoiseLayerIndex] = _noiseLayer;
+
+        _reverb = new ShimmerReverb(sampleRate);
+        _fx = new MasterFx(sampleRate);
         _master = new SmoothedValue(Parameters.Get(GlobalParamId.MasterVolume), sampleRate, 20f);
+        for (int i = 0; i < LayerCount; i++)
+        {
+            _mute[i] = new SmoothedValue(Parameters.Get(i, ParamId.Mute) >= 0.5f ? 0f : 1f, sampleRate, 10f);
+            _revSend[i] = new SmoothedValue(ParamCurves.SendGain(Parameters.Get(i, ParamId.ReverbSend)), sampleRate, 20f);
+            _shimSend[i] = new SmoothedValue(ParamCurves.SendGain(Parameters.Get(i, ParamId.ShimmerSend)), sampleRate, 20f);
+        }
     }
 
     // ------------------------------------------------------------- control API (any thread)
@@ -65,11 +112,18 @@ public sealed class AudioEngine : IAudioCallback
         return Events.TryEnqueue(in ev);
     }
 
-    /// <summary>Sets a layer parameter. Setting WAVE also requests the (background) wavetable build. Non-audio threads only.</summary>
+    /// <summary>
+    /// Sets a layer parameter. Setting WAVE also requests the (background) build of the wavetable (layers 1-3) or of the
+    /// noise sample slot (layer 4). Non-audio threads only.
+    /// </summary>
     public float SetParam(int layer, ParamId id, float value)
     {
         float v = Parameters.Set(layer, id, value);
-        if (id == ParamId.Wave) Bank.EnsureBuiltAsync((int)v);
+        if (id == ParamId.Wave)
+        {
+            if (layer == NoiseLayerIndex) Noise.EnsureBuiltAsync((int)v);
+            else Bank.EnsureBuiltAsync((int)v);
+        }
         return v;
     }
 
@@ -91,30 +145,100 @@ public sealed class AudioEngine : IAudioCallback
 
         while (Events.TryDequeue(out var ev)) Dispatch(in ev);
 
-        int voices = 0;
-        foreach (var layer in _layers)
-        {
-            layer.Render(buf, frames);
-            voices += layer.ActiveVoices;
-        }
+        ApplyGlobals();
 
-        _master.SetTarget(Parameters.Get(GlobalParamId.MasterVolume));
         float pl = 0f, pr = 0f;
-        for (int i = 0; i < frames; i++)
-        {
-            float g = ParamCurves.LevelGain(_master.Next());
-            float l = SoftClip(buf[2 * i] * g);
-            float r = SoftClip(buf[2 * i + 1] * g);
-            buf[2 * i] = l; buf[2 * i + 1] = r;
-            float al = MathF.Abs(l), ar = MathF.Abs(r);
-            if (al > pl) pl = al;
-            if (ar > pr) pr = ar;
-        }
+        for (int done = 0; done < frames; done += MaxBlock)
+            RenderChunk(buf.Slice(done * 2), Math.Min(MaxBlock, frames - done), ref pl, ref pr);
+
+        int voices = 0;
+        foreach (var layer in _layers) voices += layer.ActiveVoices;
         _peakL = Math.Max(pl, _peakL * PeakDecayPerBlock);
         _peakR = Math.Max(pr, _peakR * PeakDecayPerBlock);
         Volatile.Write(ref _pubPeakL, _peakL);
         Volatile.Write(ref _pubPeakR, _peakR);
         Volatile.Write(ref _pubVoices, voices);
+    }
+
+    /// <summary>Test hook: when set, called with "reverb", "fx" and "master" as these stages run (in order) for each chunk.</summary>
+    internal Action<string>? StageTrace;
+
+    // Bus contents of the most recent chunk (test hooks).
+    internal ReadOnlySpan<float> DryBusL => _dryL;
+    internal ReadOnlySpan<float> DryBusR => _dryR;
+    internal ReadOnlySpan<float> ReverbSendBusL => _revInL;
+    internal ReadOnlySpan<float> ReverbSendBusR => _revInR;
+    internal ReadOnlySpan<float> ShimmerSendBusL => _shimInL;
+    internal ReadOnlySpan<float> ShimmerSendBusR => _shimInR;
+
+    private void ApplyGlobals()
+    {
+        int rt = (int)Parameters.Get(GlobalParamId.ReverbType);
+        if (rt != _lastReverbType) { _lastReverbType = rt; _reverb.SetType((ReverbType)rt); }
+        float rm = Parameters.Get(GlobalParamId.ReverbMix);
+        if (rm != _lastReverbMix) { _lastReverbMix = rm; _reverb.SetMix(rm); }
+
+        int ft = (int)Parameters.Get(GlobalParamId.FxType);
+        if (ft != _lastFxType) { _lastFxType = ft; _fx.SetType((MasterFxType)ft); }
+        float fs = Parameters.Get(GlobalParamId.FxSpeed);
+        if (fs != _lastFxSpeed) { _lastFxSpeed = fs; _fx.SetSpeed(fs); }
+        float fa = Parameters.Get(GlobalParamId.FxAmount);
+        if (fa != _lastFxAmount) { _lastFxAmount = fa; _fx.SetAmount(fa); }
+        float bpm = Parameters.Get(GlobalParamId.Bpm);
+        if (bpm != _lastBpm) { _lastBpm = bpm; _fx.SetTempo(bpm); }
+
+        _master.SetTarget(Parameters.Get(GlobalParamId.MasterVolume));
+        for (int i = 0; i < LayerCount; i++)
+        {
+            _mute[i].SetTarget(Parameters.Get(i, ParamId.Mute) >= 0.5f ? 0f : 1f);
+            _revSend[i].SetTarget(ParamCurves.SendGain(Parameters.Get(i, ParamId.ReverbSend)));
+            _shimSend[i].SetTarget(ParamCurves.SendGain(Parameters.Get(i, ParamId.ShimmerSend)));
+        }
+    }
+
+    private void RenderChunk(Span<float> output, int n, ref float peakL, ref float peakR)
+    {
+        var dryL = _dryL.AsSpan(0, n); var dryR = _dryR.AsSpan(0, n);
+        var revL = _revInL.AsSpan(0, n); var revR = _revInR.AsSpan(0, n);
+        var shL = _shimInL.AsSpan(0, n); var shR = _shimInR.AsSpan(0, n);
+        var wetL = _wetL.AsSpan(0, n); var wetR = _wetR.AsSpan(0, n);
+        dryL.Clear(); dryR.Clear(); revL.Clear(); revR.Clear(); shL.Clear(); shR.Clear();
+
+        var scratch = _layerBuf.AsSpan(0, n * 2);
+        for (int li = 0; li < LayerCount; li++)
+        {
+            scratch.Clear();
+            _layers[li].Render(scratch, n);
+            for (int i = 0; i < n; i++)
+            {
+                float m = _mute[li].Next();
+                float rs = _revSend[li].Next();
+                float ss = _shimSend[li].Next();
+                float l = scratch[2 * i] * m, r = scratch[2 * i + 1] * m;
+                dryL[i] += l; dryR[i] += r;
+                revL[i] += l * rs; revR[i] += r * rs;
+                shL[i] += l * ss; shR[i] += r * ss;
+            }
+        }
+
+        StageTrace?.Invoke("reverb");
+        _reverb.Process(revL, revR, shL, shR, wetL, wetR);
+        for (int i = 0; i < n; i++) { dryL[i] += wetL[i]; dryR[i] += wetR[i]; }
+
+        StageTrace?.Invoke("fx");
+        _fx.Process(dryL, dryR);
+
+        StageTrace?.Invoke("master");
+        for (int i = 0; i < n; i++)
+        {
+            float g = ParamCurves.LevelGain(_master.Next());
+            float l = SoftClip(dryL[i] * g);
+            float r = SoftClip(dryR[i] * g);
+            output[2 * i] = l; output[2 * i + 1] = r;
+            float al = MathF.Abs(l), ar = MathF.Abs(r);
+            if (al > peakL) peakL = al;
+            if (ar > peakR) peakR = ar;
+        }
     }
 
     private void Dispatch(in EngineEvent ev)
@@ -153,6 +277,12 @@ public sealed class AudioEngine : IAudioCallback
         return x < 0f ? -y : y;
     }
 
-    /// <summary>Test access to a synth layer.</summary>
-    public SynthLayer GetLayer(int index) => _layers[index];
+    /// <summary>Test access to a synth layer (0..2).</summary>
+    public SynthLayer GetLayer(int index) => _synthLayers[index];
+
+    /// <summary>Test access to the NOISE layer (layer index 3).</summary>
+    public NoiseLayer NoiseLayer => _noiseLayer;
+
+    /// <summary>Test access to any layer by index (0..3).</summary>
+    public ILayer GetAnyLayer(int index) => _layers[index];
 }

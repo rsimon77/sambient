@@ -13,6 +13,7 @@
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/Sambient.MidiProbe/Sambient.MidiProbe.csproj" />
+    <Project Path="tools/Sambient.NoiseDump/Sambient.NoiseDump.csproj" />
     <Project Path="tools/Sambient.WaveDump/Sambient.WaveDump.csproj" />
   </Folder>
 </Solution>
