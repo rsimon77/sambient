@@ -18,6 +18,7 @@ for (int i = 0; i < args.Length; i++)
 
 if (demoPath != null) return RunEngineDemo(demoPath);
 if (opts.TryGetValue("fx-demo", out var fxDemoPath)) return FxDemo.Run(fxDemoPath);
+if (opts.TryGetValue("seq-demo", out var seqDemoPath)) return SeqDemo.Run(seqDemoPath);
 
 if (list)
 {

@@ -75,6 +75,9 @@ internal sealed class SynthVoice
     private double _mPhase;                     // ATMOS2 modulator phase (cycles)
     private float _fb1, _fb2;                   // ATMOS2 modulator feedback memory
     private float _beta, _fbk;                  // ATMOS2 current index / feedback (ramped per chunk)
+    /// <summary>Layer tuning table (note -> tuned fractional MIDI pitch); null = plain 12-TET A4=440.</summary>
+    internal Tuning? Tuning;
+    private float Tuned(int note) => Tuning is null ? note : Tuning.MidiFor(note);
     private float _curNote;                     // sounding pitch in MIDI notes (glides towards Note)
     private float _pl, _pr;
     private bool _panInit;
@@ -105,7 +108,7 @@ internal sealed class SynthVoice
     public void SlideTo(int note)
     {
         Note = note;
-        if (GlideMs <= 0.5f) _curNote = note;
+        if (GlideMs <= 0.5f) _curNote = Tuned(note);
     }
     /// <summary>Static pitch offset of this voice in cents (unison detune spread).</summary>
     public float DetuneOffsetCents;
@@ -143,7 +146,7 @@ internal sealed class SynthVoice
     {
         for (int k = 0; k < MaxOsc; k++) _osc[k].SetWave(_table!);
         _xfade = 0;
-        _curNote = Note;
+        _curNote = Tuned(Note);
         _structLatch = true; _fade = 0; _sg = 1f;
         _gInit = false; _panInit = false;
         _mPhase = 0; _fb1 = _fb2 = 0f;
@@ -287,14 +290,15 @@ internal sealed class SynthVoice
         else if (_fade == 0 && target != _structure) _fade = -1;
 
         // ---- pitch
-        if (_curNote != Note)
+        float tgt = Tuned(Note);           // tuned pitch of the target note (glides between TABLE pitches, log-frequency)
+        if (_curNote != tgt)
         {
-            if (GlideMs <= 0.5f) _curNote = Note;
+            if (GlideMs <= 0.5f) _curNote = tgt;
             else
             {
                 float k = 1f - MathF.Exp(-3f * n / (GlideMs * 0.001f * _fs));
-                _curNote += (Note - _curNote) * k;
-                if (MathF.Abs(Note - _curNote) < 0.002f) _curNote = Note;
+                _curNote += (tgt - _curNote) * k;
+                if (MathF.Abs(tgt - _curNote) < 0.002f) _curNote = tgt;
             }
         }
         int mid = n >> 1;

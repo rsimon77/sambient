@@ -73,6 +73,17 @@ public enum ParamId
     ArpType,
     /// <summary>Step note length index (sequencer NOTE, also the arpeggiator speed), a <see cref="StepNote"/> value.</summary>
     StepNote,
+
+    // ---- Sequencer track (M4) ----
+    /// <summary>Sequence length 1..64 steps.</summary>
+    SeqLength,
+    /// <summary>RND STEP unit index: 0 = OFF, 1 = 1, 2 = 2, 3 = 4, 4 = 8, 5 = 16 steps.</summary>
+    RndStep,
+
+    // ---- Tuning (M4) ----
+    /// <summary>Tonic / concert-pitch index for the pattern temperament (layer-specific so SLFG/CHKR/PLNT can differ per layer):
+    /// PR.MJ..PY.FL: 0..11 = C..B; SLFG: 0..8 = 174, 285, 396, 417, 528, 639, 741, 852, 963 Hz; CHKR/PLNT: 0..6 = 1st..7th.</summary>
+    TuningKey,
 }
 
 /// <summary>Global parameters.</summary>
@@ -96,7 +107,32 @@ public enum GlobalParamId
     Bpm,
     /// <summary>The layer (1..4) that the keyboards and layer-parameter controls address.</summary>
     SelectedLayer,
+
+    // ---- Pattern / sequencer (M4) ----
+    /// <summary>Pattern Palette level 0..127 (-inf..+6 dB, 63.5 = 0 dB).</summary>
+    PatternLevel,
+    /// <summary>FX routing: 0 = POST (master FX after the pattern level: tails survive level 0), 1 = PRE.</summary>
+    FxRouting,
+    /// <summary>RND SEQ on/off (randomized step playback).</summary>
+    RndSeq,
+    /// <summary>Transpose -12..+12 semitones (for SLFG/CHKR/PLNT: key shift index, same range).</summary>
+    Transpose,
+
+    // ---- Tuning (M4) ----
+    /// <summary>A <see cref="Temperament"/> value (pattern setting).</summary>
+    Temperament,
+    /// <summary>Master tune -75..+75 cents (system setting; ignored by SLFG/CHKR/PLNT).</summary>
+    MasterTuneCents,
+    /// <summary>TUNE ALL -1200..+1200 cents (real-time, all layers).</summary>
+    TuneAllCents,
+
+    // ---- Sequencer (M6) ----
+    /// <summary>Mute mode: 0 = SND (a muted layer is silent, whatever plays it), 1 = SEQ (only the sequencer notes of a muted layer are dropped; the keyboard still plays it).</summary>
+    MuteMode,
 }
+
+/// <summary>Pattern temperaments: EQUA, PR.MJ, PR.MN, PY.SH, PY.FL, SLFG, CHKR, PLNT.</summary>
+public enum Temperament { Equal, PureMajor, PureMinor, PythagoreanSharp, PythagoreanFlat, Solfeggio, Chakra, Planetary }
 
 public enum FilterType { Off = 0, LowPass = 1, HighPass = 2, BandPass = 3 }
 
@@ -147,6 +183,9 @@ public static class ParamTable
         new(0, 127, 40, false),     // UnisonDetune
         new(0, 11, 0, true),        // ArpType (UP)
         new(0, 14, 13, true),       // StepNote (1/16)
+        new(1, 64, 16, true),       // SeqLength
+        new(0, 5, 0, true),         // RndStep (OFF)
+        new(0, 11, 0, true),        // TuningKey
     ];
 
     private static readonly ParamInfo[] Global =
@@ -160,6 +199,14 @@ public static class ParamTable
         new(0, 127, 0, false),      // FxAmount
         new(40, 250, 90, true),     // Bpm
         new(1, 4, 1, true),         // SelectedLayer
+        new(0, 127, 63.5f, false),  // PatternLevel (0 dB)
+        new(0, 1, 0, true),         // FxRouting (POST)
+        new(0, 1, 0, true),         // RndSeq
+        new(-12, 12, 0, true),      // Transpose
+        new(0, 7, 0, true),         // Temperament (EQUA)
+        new(-75, 75, 0, false),     // MasterTuneCents
+        new(-1200, 1200, 0, false), // TuneAllCents
+        new(0, 1, 0, true),         // MuteMode (SND)
     ];
 
     public static ParamInfo Get(ParamId id) => Layer[(int)id];
@@ -189,6 +236,14 @@ public static class ParamTable
 /// Plain-float parameter storage, indexed [layer, id]. Writers (UI / MIDI threads) use Volatile.Write, the audio
 /// thread reads each value once per block with Volatile.Read. No locks, no allocation after construction.
 /// Layout is ready for more layers (<see cref="MaxLayers"/>) and more parameters (extend the enums + tables).
+///
+/// P-lock overlay: every layer parameter has a BASE value (what the UI shows and edits, what a pattern palette saves) and an
+/// optional OVERRIDE (a parameter lock of the playing sequencer step, or a short-lived engine override such as the fast
+/// release of a Stop). <see cref="Get(int, ParamId)"/> returns the EFFECTIVE value (override if set, else base) and is what the
+/// layers and the engine read; <see cref="GetBase"/> returns the base value for UIs and persistence. <see cref="Set(int, ParamId, float)"/>
+/// always writes the base. Overrides are written only by the audio thread (sequencer) through <see cref="SetOverride"/> /
+/// <see cref="ClearOverride"/> / <see cref="ClearOverrides"/>; they are plain Volatile float + flag pairs, so the overlay costs
+/// one extra read per parameter and never allocates or locks. Globals have no overlay.
 /// </summary>
 public sealed class ParameterStore
 {
@@ -197,6 +252,8 @@ public sealed class ParameterStore
     public const int NoiseLayerIndex = 3;
 
     private readonly float[] _layer = new float[MaxLayers * ParamTable.LayerParamCount];
+    private readonly float[] _ovr = new float[MaxLayers * ParamTable.LayerParamCount];
+    private readonly int[] _ovrOn = new int[MaxLayers * ParamTable.LayerParamCount];
     private readonly float[] _global = new float[ParamTable.GlobalParamCount];
 
     public ParameterStore()
@@ -210,15 +267,50 @@ public sealed class ParameterStore
 
     private static int Index(int layer, ParamId id) => layer * ParamTable.LayerParamCount + (int)id;
 
-    public float Get(int layer, ParamId id) => Volatile.Read(ref _layer[Index(layer, id)]);
+    /// <summary>EFFECTIVE value: the override (P-lock) if one is active, else the base value. Read by the layers / the engine.</summary>
+    public float Get(int layer, ParamId id)
+    {
+        int i = Index(layer, id);
+        return Volatile.Read(ref _ovrOn[i]) != 0 ? Volatile.Read(ref _ovr[i]) : Volatile.Read(ref _layer[i]);
+    }
 
-    /// <summary>Clamps to the parameter range and stores. Returns the stored value.</summary>
+    /// <summary>BASE value (what the pattern stores; what knobs and screens show). Ignores overrides.</summary>
+    public float GetBase(int layer, ParamId id) => Volatile.Read(ref _layer[Index(layer, id)]);
+
+    /// <summary>Clamps to the parameter range and stores the BASE value. Returns the stored value.</summary>
     public float Set(int layer, ParamId id, float value)
+    {
+        value = Normalize(layer, id, value);
+        Volatile.Write(ref _layer[Index(layer, id)], value);
+        return value;
+    }
+
+    private static float Normalize(int layer, ParamId id, float value)
     {
         value = ParamTable.Clamp(id, value);
         if (id == ParamId.Wave) value = Math.Min(value, ParamTable.MaxWave(layer));
-        Volatile.Write(ref _layer[Index(layer, id)], value);
         return value;
+    }
+
+    /// <summary>True while an override (P-lock) hides the base value. Audio thread (writer) or diagnostics.</summary>
+    public bool HasOverride(int layer, ParamId id) => Volatile.Read(ref _ovrOn[Index(layer, id)]) != 0;
+
+    /// <summary>Activates an override (clamped like <see cref="Set(int, ParamId, float)"/>). Audio thread only.</summary>
+    public void SetOverride(int layer, ParamId id, float value)
+    {
+        int i = Index(layer, id);
+        Volatile.Write(ref _ovr[i], Normalize(layer, id, value));
+        Volatile.Write(ref _ovrOn[i], 1);
+    }
+
+    /// <summary>Removes one override: the parameter returns to its base value. Audio thread only.</summary>
+    public void ClearOverride(int layer, ParamId id) => Volatile.Write(ref _ovrOn[Index(layer, id)], 0);
+
+    /// <summary>Removes every override of a layer. Audio thread only.</summary>
+    public void ClearOverrides(int layer)
+    {
+        int b = layer * ParamTable.LayerParamCount;
+        for (int k = 0; k < ParamTable.LayerParamCount; k++) Volatile.Write(ref _ovrOn[b + k], 0);
     }
 
     public float Get(GlobalParamId id) => Volatile.Read(ref _global[(int)id]);

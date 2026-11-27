@@ -47,6 +47,8 @@ public sealed class SynthLayer : ILayer, IVoiceSink, IModulatedLayer
     // per-block cached parameter values
     private FilterMode _filter;
     private float _octaveSemis, _bendRange;
+    private readonly Tuning _tuning = new(semitoneOnly: false);
+    private SmoothedValue _tuneAll;      // TUNE ALL in cents (smoothed, no zipper)
 
     public int Index => _index;
     public int ActiveVoices { get; private set; }
@@ -61,13 +63,14 @@ public sealed class SynthLayer : ILayer, IVoiceSink, IModulatedLayer
         _index = index; _fs = sampleRate; _params = parameters; _bank = bank;
         _ctl = new VoiceModeController(parameters, index, sampleRate, this, unisonSupported: true);
         _mod = new LayerModulation(index, sampleRate, parameters);
-        for (int i = 0; i < VoiceCount; i++) _voices[i] = new SynthVoice(sampleRate, index * VoiceCount + i);
+        for (int i = 0; i < VoiceCount; i++) { _voices[i] = new SynthVoice(sampleRate, index * VoiceCount + i); _voices[i].Tuning = _tuning; }
         _harm = new SmoothedValue(parameters.Get(index, ParamId.Harmonic), sampleRate, 15f);
         _cutoff = new SmoothedValue(parameters.Get(index, ParamId.Cutoff), sampleRate, 15f);
         _reso = new SmoothedValue(parameters.Get(index, ParamId.Resonance), sampleRate, 15f);
         _level = new SmoothedValue(parameters.Get(index, ParamId.Level), sampleRate, 20f);
         _pan = new SmoothedValue(parameters.Get(index, ParamId.Pan), sampleRate, 20f);
         _bend = new SmoothedValue(0f, sampleRate, 8f);
+        _tuneAll = new SmoothedValue(parameters.Get(GlobalParamId.TuneAllCents), sampleRate, 25f);
         UpdateParams();
     }
 
@@ -286,7 +289,11 @@ public sealed class SynthLayer : ILayer, IVoiceSink, IModulatedLayer
             FilterType.BandPass => FilterMode.BandPass,
             _ => FilterMode.Off,
         };
-        _octaveSemis = 12f * _params.Get(i, ParamId.Octave);
+        // Tuning: table per layer (temperament + TuningKey + master tune); SLFG/CHKR/PLNT ignore master tune and OCTAVE.
+        _tuning.Update((Temperament)(int)_params.Get(GlobalParamId.Temperament), (int)_params.Get(i, ParamId.TuningKey),
+            _params.Get(GlobalParamId.MasterTuneCents));
+        _tuneAll.SetTarget(_params.Get(GlobalParamId.TuneAllCents));
+        _octaveSemis = _tuning.IsSpecial ? 0f : 12f * _params.Get(i, ParamId.Octave);
         _bendRange = _params.Get(GlobalParamId.PitchBendRange);
 
         float a = _params.Get(i, ParamId.Attack), r = _params.Get(i, ParamId.Release);
@@ -323,7 +330,7 @@ public sealed class SynthLayer : ILayer, IVoiceSink, IModulatedLayer
         float h0 = _harm.Current;
         _harm.Skip(n);
         float h1 = _harm.Current;
-        _cutoff.Skip(n); _reso.Skip(n); _level.Skip(n); _pan.Skip(n); _bend.Skip(n);
+        _cutoff.Skip(n); _reso.Skip(n); _level.Skip(n); _pan.Skip(n); _bend.Skip(n); _tuneAll.Skip(n);
         _mod.BeginSub(n);       // layer-level LFO clocks (free-running even without voices) and send modulation
 
         bool any = false;
@@ -334,7 +341,7 @@ public sealed class SynthLayer : ILayer, IVoiceSink, IModulatedLayer
         {
             Harmonic0 = h0,
             HarmonicStep = (h1 - h0) / n,
-            PitchSemis = _octaveSemis + _bend.Current * _bendRange,
+            PitchSemis = _octaveSemis + _bend.Current * _bendRange + _tuneAll.Current * 0.01f,
             Filter = _filter,
             CutoffHz = ParamCurves.CutoffHz(_cutoff.Current),
             Q = ParamCurves.ResonanceQ(_reso.Current),

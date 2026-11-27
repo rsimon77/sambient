@@ -19,6 +19,9 @@ public sealed class NoteRouter
         _engine = engine; _params = parameters;
     }
 
+    /// <summary>Optional observer of every routed note (the sequencer's recorder). Invoked on the calling thread after the engine call.</summary>
+    public INoteListener? Listener { get; set; }
+
     /// <summary>Launchkey channel 1..4 -> layer 1..4 (off by default). Channels above 4 follow the selected layer.</summary>
     public bool MidiChannelToLayer { get; set; }
 
@@ -37,6 +40,7 @@ public sealed class NoteRouter
         if (prev >= 0 && prev != layer) e.NoteOff(prev, note);       // same key re-pressed on another layer
         Volatile.Write(ref _layerOfNote[slot], layer + 1);
         e.NoteOn(layer, note, velocity);
+        Listener?.NoteOn(layer, note, velocity);
         return layer;
     }
 
@@ -47,6 +51,7 @@ public sealed class NoteRouter
         int layer = Interlocked.Exchange(ref _layerOfNote[(int)source * 128 + note], 0) - 1;
         if (layer < 0) return -1;
         _engine().NoteOff(layer, note);
+        Listener?.NoteOff(layer, note);
         return layer;
     }
 

@@ -9,5 +9,6 @@
   <ItemGroup>
     <ProjectReference Include="../../src/Sambient.Dsp/Sambient.Dsp.csproj" />
     <ProjectReference Include="../../src/Sambient.Engine/Sambient.Engine.csproj" />
+    <ProjectReference Include="../../src/Sambient.Seq/Sambient.Seq.csproj" />
   </ItemGroup>
 </Project>

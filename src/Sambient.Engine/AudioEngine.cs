@@ -19,7 +19,7 @@ namespace Sambient.Engine;
 /// To change the sample rate create a new engine (non-RT) and share the ParameterStore / WavetableBank / NoiseBank with it;
 /// effect instances are created per engine.
 /// </summary>
-public sealed class AudioEngine : IAudioCallback
+public sealed class AudioEngine : IAudioCallback, ISequencerHost
 {
     public const int SynthLayerCount = 3;
     public const int NoiseLayerIndex = ParameterStore.NoiseLayerIndex;
@@ -50,6 +50,8 @@ public sealed class AudioEngine : IAudioCallback
     // last applied global effect settings (apply only on change)
     private int _lastReverbType = -1, _lastFxType = -1;
     private float _lastReverbMix = float.NaN, _lastFxSpeed = float.NaN, _lastFxAmount = float.NaN, _lastBpm = float.NaN;
+
+    private IEngineSequencer? _seq;
 
     private float _peakL, _peakR;                 // audio thread running peaks (with decay)
     private float _pubPeakL, _pubPeakR;           // published (Volatile)
@@ -139,6 +141,36 @@ public sealed class AudioEngine : IAudioCallback
 
     public float SetGlobal(GlobalParamId id, float value) => Parameters.Set(id, value);
 
+    /// <summary>Attaches the sequencer that <see cref="Render"/> drives (non-audio thread; one sequencer per engine).</summary>
+    public void AttachSequencer(IEngineSequencer sequencer)
+    {
+        sequencer.Bind(this);
+        Volatile.Write(ref _seq, sequencer);
+    }
+
+    // ------------------------------------------------------------- ISequencerHost (audio thread)
+
+    ParameterStore ISequencerHost.Parameters => Parameters;
+
+    void ISequencerHost.SeqNoteOn(int layer, int note, int velocity)
+    {
+        if ((uint)layer >= (uint)_layers.Length) return;
+        if (Parameters.Get(GlobalParamId.MuteMode) >= 0.5f && Parameters.Get(layer, ParamId.Mute) >= 0.5f) return;   // SEQ mute
+        _layers[layer].NoteOn(note, velocity);
+    }
+
+    void ISequencerHost.SeqNoteOff(int layer, int note)
+    {
+        if ((uint)layer < (uint)_layers.Length) _layers[layer].NoteOff(note);
+    }
+
+    void ISequencerHost.ReleaseAllNotes()
+    {
+        foreach (var l in _layers) l.AllNotesOff();
+    }
+
+    void ISequencerHost.ResetReverb() => _reverb.Reset();
+
     // ------------------------------------------------------------- UI snapshot (lock-free)
 
     public int ActiveVoices => Volatile.Read(ref _pubVoices);
@@ -155,11 +187,29 @@ public sealed class AudioEngine : IAudioCallback
 
         while (Events.TryDequeue(out var ev)) Dispatch(in ev);
 
-        ApplyGlobals();
+        var seq = Volatile.Read(ref _seq);
+        seq?.BeginBlock(frames);
 
         float pl = 0f, pr = 0f;
-        for (int done = 0; done < frames; done += MaxBlock)
-            RenderChunk(buf.Slice(done * 2), Math.Min(MaxBlock, frames - done), ref pl, ref pr);
+        int done = 0;
+        while (done < frames)
+        {
+            int n = Math.Min(MaxBlock, frames - done);
+            if (seq != null)
+            {
+                seq.ProcessDueEvents();                       // may start/stop notes and change parameters at this exact frame
+                n = Math.Min(n, Math.Max(1, seq.SamplesToNextEvent));
+            }
+            ApplyGlobals();
+            var chunk = buf.Slice(done * 2, n * 2);
+            RenderChunk(chunk, n, ref pl, ref pr);
+            if (seq != null)
+            {
+                seq.MixPost(chunk, n);
+                seq.Advance(n);
+            }
+            done += n;
+        }
 
         int voices = 0;
         foreach (var layer in _layers) voices += layer.ActiveVoices;
@@ -200,7 +250,9 @@ public sealed class AudioEngine : IAudioCallback
         _master.SetTarget(Parameters.Get(GlobalParamId.MasterVolume));
         for (int i = 0; i < LayerCount; i++)
         {
-            _mute[i].SetTarget(Parameters.Get(i, ParamId.Mute) >= 0.5f ? 0f : 1f);
+            // SND mute silences the layer output; in SEQ mute mode only the sequencer notes are dropped (see SeqNoteOn)
+            bool silence = Parameters.Get(i, ParamId.Mute) >= 0.5f && Parameters.Get(GlobalParamId.MuteMode) < 0.5f;
+            _mute[i].SetTarget(silence ? 0f : 1f);
             // LFO -> REVERB / SHIMMER send modulation (layer-level LFO, from the previous block), in send-knob units
             var lm = (_layers[i] as IModulatedLayer)?.Mod;
             float rOff = lm?.ReverbSendOffset ?? 0f, sOff = lm?.ShimmerSendOffset ?? 0f;

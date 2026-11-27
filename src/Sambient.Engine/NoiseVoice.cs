@@ -59,7 +59,7 @@ internal sealed class NoiseVoice
     public void SlideTo(int note)
     {
         Note = note;
-        if (GlideMs <= 0.5f) _curNote = note;
+        if (GlideMs <= 0.5f) _curNote = Tuned(note);
     }
     /// <summary>Static pitch offset of this voice in cents (unison detune spread).</summary>
     public float DetuneOffsetCents;
@@ -70,6 +70,9 @@ internal sealed class NoiseVoice
     internal float SoundingNote => _curNote;
 
     private readonly VoiceModulator _vm;
+    /// <summary>Layer tuning table (note -> tuned fractional MIDI pitch); null = plain 12-TET A4=440.</summary>
+    internal Tuning? Tuning;
+    private float Tuned(int note) => Tuning is null ? note : Tuning.MidiFor(note);
     private float _curNote;
     private float _ng, _sg;
     private float _pl, _pr;
@@ -109,7 +112,7 @@ internal sealed class NoiseVoice
         Active = true; Gate = true; SustainDeferred = false; Pending = false;
         _velGain = SynthVoice.VelocityGain(velocity);
         _filterL.Reset(); _filterR.Reset();
-        _curNote = note; _init = false; _vm.Retrigger(); _notify = true;
+        _curNote = Tuned(note); _init = false; _vm.Retrigger(); _notify = true;
         _env.SetTimes(_attackMs, _releaseMs);
         _env.NoteOn();
     }
@@ -182,7 +185,7 @@ internal sealed class NoiseVoice
             _xfade = 0;
             _velGain = SynthVoice.VelocityGain(vel);
             _filterL.Reset(); _filterR.Reset();
-            _curNote = Note; _init = false; _vm.Retrigger(); _notify = true;
+            _curNote = Tuned(Note); _init = false; _vm.Retrigger(); _notify = true;
             _env.SetTimes(_attackMs, _releaseMs);
             _env.NoteOn();
         }
@@ -211,14 +214,15 @@ internal sealed class NoiseVoice
         vm.Prepare(m, n, offset);
         int mid = n >> 1;
 
-        if (_curNote != Note)
+        float tgt = Tuned(Note);           // tuned pitch of the target note (glides between TABLE pitches, log-frequency)
+        if (_curNote != tgt)
         {
-            if (GlideMs <= 0.5f) _curNote = Note;
+            if (GlideMs <= 0.5f) _curNote = tgt;
             else
             {
                 float k = 1f - MathF.Exp(-3f * n / (GlideMs * 0.001f * _fs));
-                _curNote += (Note - _curNote) * k;
-                if (MathF.Abs(Note - _curNote) < 0.002f) _curNote = Note;
+                _curNote += (tgt - _curNote) * k;
+                if (MathF.Abs(tgt - _curNote) < 0.002f) _curNote = tgt;
             }
         }
 
