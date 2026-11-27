@@ -36,6 +36,7 @@ public sealed class AudioEngine : IAudioCallback, ISequencerHost
     private readonly ShimmerReverb _reverb;
     private readonly MasterFx _fx;
     private SmoothedValue _master;
+    private SmoothedValue _patternLevel;   // PTN LVL (pattern palette level), see FxRouting for its position
     private readonly SmoothedValue[] _mute = new SmoothedValue[LayerCount];
     private readonly SmoothedValue[] _revSend = new SmoothedValue[LayerCount];
     private readonly SmoothedValue[] _shimSend = new SmoothedValue[LayerCount];
@@ -84,6 +85,7 @@ public sealed class AudioEngine : IAudioCallback, ISequencerHost
         _reverb = new ShimmerReverb(sampleRate);
         _fx = new MasterFx(sampleRate);
         _master = new SmoothedValue(Parameters.Get(GlobalParamId.MasterVolume), sampleRate, 20f);
+        _patternLevel = new SmoothedValue(Parameters.Get(GlobalParamId.PatternLevel), sampleRate, 20f);
         for (int i = 0; i < LayerCount; i++)
         {
             _mute[i] = new SmoothedValue(Parameters.Get(i, ParamId.Mute) >= 0.5f ? 0f : 1f, sampleRate, 10f);
@@ -248,6 +250,7 @@ public sealed class AudioEngine : IAudioCallback, ISequencerHost
         if (bpm != _lastBpm) { _lastBpm = bpm; _fx.SetTempo(bpm); }
 
         _master.SetTarget(Parameters.Get(GlobalParamId.MasterVolume));
+        _patternLevel.SetTarget(Parameters.Get(GlobalParamId.PatternLevel));
         for (int i = 0; i < LayerCount; i++)
         {
             // SND mute silences the layer output; in SEQ mute mode only the sequencer notes are dropped (see SeqNoteOn)
@@ -290,8 +293,13 @@ public sealed class AudioEngine : IAudioCallback, ISequencerHost
         _reverb.Process(revL, revR, shL, shR, wetL, wetR);
         for (int i = 0; i < n; i++) { dryL[i] += wetL[i]; dryR[i] += wetR[i]; }
 
+        // FX routing (as the original): POST = master FX after the pattern level, so FX tails survive PTN LVL 0;
+        // PRE = master FX before the pattern level, so PTN LVL 0 silences everything.
+        bool fxPre = Parameters.Get(GlobalParamId.FxRouting) >= 0.5f;
+        if (!fxPre) ApplyPatternLevel(dryL, dryR);
         StageTrace?.Invoke("fx");
         _fx.Process(dryL, dryR);
+        if (fxPre) ApplyPatternLevel(dryL, dryR);
 
         StageTrace?.Invoke("master");
         for (int i = 0; i < n; i++)
@@ -341,6 +349,15 @@ public sealed class AudioEngine : IAudioCallback, ISequencerHost
     }
 
     /// <summary>Linear below the knee (-3 dBFS), tanh-shaped above it; asymptote 1.0, NaN -> 0.</summary>
+    private void ApplyPatternLevel(Span<float> l, Span<float> r)
+    {
+        for (int i = 0; i < l.Length; i++)
+        {
+            float g = ParamCurves.LevelGain(_patternLevel.Next());
+            l[i] *= g; r[i] *= g;
+        }
+    }
+
     public static float SoftClip(float x)
     {
         float a = MathF.Abs(x);

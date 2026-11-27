@@ -6,16 +6,18 @@ using Sambient.Engine;
 const int SampleRate = 48000;
 
 var opts = new Dictionary<string, string>();
-bool list = false;
+bool list = false, presetReport = false;
 string? demoPath = null;
 for (int i = 0; i < args.Length; i++)
 {
     if (args[i] == "--list") list = true;
+    else if (args[i] == "--preset-report") presetReport = true;
     else if (args[i] == "--engine-demo" && i + 1 < args.Length) demoPath = args[++i];
     else if (args[i].StartsWith("--") && i + 1 < args.Length) opts[args[i][2..]] = args[++i];
     else { Usage(); return 1; }
 }
 
+if (presetReport) return PresetReport.Run(opts);
 if (demoPath != null) return RunEngineDemo(demoPath);
 if (opts.TryGetValue("fx-demo", out var fxDemoPath)) return FxDemo.Run(fxDemoPath);
 if (opts.TryGetValue("seq-demo", out var seqDemoPath)) return SeqDemo.Run(seqDemoPath);

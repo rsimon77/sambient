@@ -1,0 +1,50 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Sambient.App.ViewModels"
+             x:Class="Sambient.App.Views.PatternBrowser"
+             x:DataType="vm:MainViewModel">
+  <StackPanel Spacing="8">
+    <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+      <ItemsControl Grid.Column="0" ItemsSource="{Binding BankTabs}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="2" /></ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:SelectorItemViewModel">
+            <Button Classes="seg" Classes.on="{Binding IsSelected}" Content="{Binding Text}" Command="{Binding SelectCommand}" />
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+      <TextBlock Grid.Column="1" Text="{Binding PatternStatus}" Classes="caption" VerticalAlignment="Center" Margin="14,0,0,0" />
+      <Button Grid.Column="2" Classes="small" Content="SAVE" Command="{Binding SavePaletteCommand}" Margin="0,0,6,0"
+              ToolTip.Tip="Save the edited palette into its current slot" />
+      <Button Grid.Column="3" Classes="small" Content="RELOAD" Command="{Binding ReloadPaletteCommand}"
+              ToolTip.Tip="Discard edits: reload the palette from its slot (factory preset or saved copy)" />
+    </Grid>
+    <ItemsControl ItemsSource="{Binding Slots}">
+      <ItemsControl.ItemsPanel>
+        <ItemsPanelTemplate><UniformGrid Columns="8" /></ItemsPanelTemplate>
+      </ItemsControl.ItemsPanel>
+      <ItemsControl.ItemTemplate>
+        <DataTemplate x:DataType="vm:PatternSlotViewModel">
+          <Panel>
+            <Button Classes="slot" Classes.cur="{Binding IsCurrent}" Classes.q="{Binding IsQueued}" Classes.user="{Binding IsUser}"
+                    Command="{Binding ClickCommand}" IsVisible="{Binding !IsRenaming}">
+              <Grid RowDefinitions="Auto,*">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="{Binding Number}" FontWeight="Bold" FontSize="13" />
+                  <TextBlock Grid.Column="1" Text="{Binding ChainText}" FontSize="10" Foreground="#ffb454" ToolTip.Tip="Position in the chain" />
+                </Grid>
+                <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="11" VerticalAlignment="Bottom" TextTrimming="CharacterEllipsis" />
+              </Grid>
+            </Button>
+            <TextBox Classes="slotname" Text="{Binding EditName, Mode=TwoWay}" MaxLength="8" IsVisible="{Binding IsRenaming}"
+                     Margin="2" VerticalAlignment="Center" FontFamily="Menlo, Consolas, monospace" Watermark="NAME" />
+          </Panel>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+    <TextBlock Classes="caption" TextWrapping="Wrap"
+               Text="Click: select (queued until the pattern cycle ends while playing) · right-click: load now / save here / init / rename / revert to factory · darker slots hold a saved copy" />
+  </StackPanel>
+</UserControl>

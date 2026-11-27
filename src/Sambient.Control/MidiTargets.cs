@@ -40,11 +40,30 @@ public static class MidiTargets
     public const string FxSpeed = "FxSpeed";
     public const string FxAmount = "FxAmount";
 
+    /// <summary>Pattern level (PTN LVL).</summary>
+    public const string PatternLevel = "PatternLevel";
+    /// <summary>Master tune in cents (system setting).</summary>
+    public const string MasterTuneCents = "MasterTuneCents";
+    /// <summary>TUNE ALL in cents (real-time).</summary>
+    public const string TuneAllCents = "TuneAllCents";
+
+    // transport buttons (momentary: a CC value >= 64 presses the button). The CC numbers the Launchkey MK3 transport buttons
+    // send in its default (non-DAW) mode are NOT confirmed yet, so there are no default bindings: use MIDI learn.
+    public const string TransportPlay = "TransportPlay";
+    public const string TransportStop = "TransportStop";
+    public const string TransportRecord = "TransportRecord";
+    public const string TransportPrmRec = "TransportPrmRec";
+
+    public static readonly IReadOnlyList<string> Transport = [TransportPlay, TransportStop, TransportRecord, TransportPrmRec];
+
+    /// <summary>True for the MIDI-learnable transport button targets.</summary>
+    public static bool IsTransportTarget(string target) => Transport.Contains(target);
+
     public static readonly IReadOnlyList<string> Layer =
         [Harmonic, Cutoff, Resonance, Attack, Release, Level, Pan, Velocity, ReverbSend, ShimmerSend,
          Pitch, Detune, Balance, ModRate, ModDepth, Lfo1Rate, Lfo1Depth, Lfo2Rate, Lfo2Depth, Glide, UnisonDetune];
 
-    public static readonly IReadOnlyList<string> Global = [MasterVolume, ReverbMix, FxSpeed, FxAmount];
+    public static readonly IReadOnlyList<string> Global = [MasterVolume, ReverbMix, FxSpeed, FxAmount, PatternLevel, MasterTuneCents, TuneAllCents];
 
     /// <summary>True for targets that apply to the selected layer.</summary>
     public static bool IsLayerTarget(string target) => Layer.Contains(target);

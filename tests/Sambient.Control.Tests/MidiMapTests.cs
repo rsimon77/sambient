@@ -133,3 +133,49 @@ public class MidiTargetsTests
         Assert.False(MidiTargets.IsLayerTarget(t));
     }
 }
+
+public class TransportTargetTests
+{
+    [Fact]
+    public void TransportTargets_AreKnownAndDistinct()
+    {
+        Assert.Equal(4, MidiTargets.Transport.Count);
+        Assert.Equal(4, MidiTargets.Transport.Distinct().Count());
+        foreach (var t in new[] { MidiTargets.TransportPlay, MidiTargets.TransportStop, MidiTargets.TransportRecord, MidiTargets.TransportPrmRec })
+            Assert.True(MidiTargets.IsTransportTarget(t), t);
+        Assert.False(MidiTargets.IsTransportTarget(MidiTargets.Cutoff));
+        Assert.False(MidiTargets.IsLayerTarget(MidiTargets.TransportPlay));
+        Assert.DoesNotContain(MidiTargets.TransportPlay, MidiTargets.Global);
+    }
+
+    [Fact]
+    public void Learn_BindsTransportButtons_AndTheyResolveAndRoundTrip()
+    {
+        var m = MidiMap.CreateDefault();
+        var learn = new MidiLearn(m);
+        learn.Arm(MidiTargets.TransportPlay);
+        Assert.Equal(MidiTargets.TransportPlay, learn.TryCapture(new ControllerCc(ControllerSource.Daw, 0, 115, 127)));
+        m.Bind(MapSource.Keys, null, 116, MidiTargets.TransportStop);
+        Assert.True(m.TryResolve(ControllerSource.Daw, 0, 115, out var t));
+        Assert.Equal(MidiTargets.TransportPlay, t);
+        Assert.True(MidiTargets.IsTransportTarget(t));
+
+        var path = Path.Combine(Path.GetTempPath(), "sambient-test-" + Guid.NewGuid().ToString("N"), "midimap.json");
+        m.Save(path);
+        var m2 = MidiMap.LoadOrCreate(path);
+        Assert.True(m2.TryResolve(ControllerSource.Keys, 3, 116, out t));
+        Assert.Equal(MidiTargets.TransportStop, t);
+        m2.Clear(MidiTargets.TransportStop);
+        Assert.False(m2.TryResolve(ControllerSource.Keys, 3, 116, out _));
+    }
+
+    [Fact]
+    public void RebindingATransportTarget_ReplacesTheOldCc()
+    {
+        var m = new MidiMap();
+        m.Bind(MapSource.Any, null, 115, MidiTargets.TransportRecord);
+        m.Bind(MapSource.Any, null, 117, MidiTargets.TransportRecord);
+        Assert.False(m.TryResolve(ControllerSource.Keys, 0, 115, out _));
+        Assert.True(m.TryResolve(ControllerSource.Keys, 0, 117, out _));
+    }
+}

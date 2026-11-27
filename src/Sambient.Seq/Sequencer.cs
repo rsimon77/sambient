@@ -507,6 +507,15 @@ public sealed class Sequencer : INoteListener
     /// <summary>Loads a palette at once, restarting the sequence if it plays.</summary>
     public void LoadPaletteNow(int bank, int slot) => LoadPrepared(PrepareSlot(bank, slot));
 
+    /// <summary>
+    /// Loads a standalone palette model (e.g. a <see cref="Capture"/> carried over to a rebuilt sequencer) as the edited palette.
+    /// <paramref name="slot"/> is the bank slot index (bank * 16 + slot) it should be remembered as, or -1 for an unsaved palette.
+    /// </summary>
+    public void LoadModel(PatternPalette model, int slot = -1) => LoadPrepared(Prepare(model, slot));
+
+    /// <summary>True when the audio thread has made the edited palette the active one (its parameters are in the store).</summary>
+    public bool PaletteApplied { get { lock (_gate) return ReferenceEquals(_core.ActivePalette, _editing); } }
+
     private void LoadPrepared(PreparedPalette prep)
     {
         lock (_gate) { _editing = prep; _pendingImmediate = prep; _queued = null; _plan = null; }

@@ -12,6 +12,7 @@ using Sambient.Dsp.Noise;
 using Sambient.Dsp.Params;
 using Sambient.Dsp.Wavetables;
 using Sambient.Engine;
+using Sambient.Seq;
 
 namespace Sambient.App.ViewModels;
 
@@ -28,6 +29,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool _loading;                       // true while the editor is being loaded from the parameter store
     private readonly EngineCallback _callback = new();
     private AudioEngine _engine;
+    private Sequencer _seq = null!;
+    private readonly PatternBank _patternBank = new();
+    private readonly NoteTap _noteTap;
     private readonly AppSettings _settings;
     private readonly MidiMap _map;
     private readonly MidiLearn _learn;
@@ -63,6 +67,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public ParamKnobViewModel ReverbMixKnob { get; }
     public ParamKnobViewModel FxSpeedKnob { get; }
     public ParamKnobViewModel FxAmountKnob { get; }
+    public ParamKnobViewModel PatternLevelKnob { get; }
+    public ParamKnobViewModel MasterTuneKnob { get; }
+    public ParamKnobViewModel TuneAllKnob { get; }
+    public ParamChoiceViewModel RndStepChoice { get; }
+    public ParamChoiceViewModel TemperamentChoice { get; }
+    public ParamChoiceViewModel TuningKeyChoice { get; }
+    private static readonly string[] RndStepNames = ["OFF", "1", "2", "4", "8", "16"];
     private readonly IReadOnlyList<WaveOption> _synthWaves;
     private readonly IReadOnlyList<WaveOption> _noiseWaves;
     public IReadOnlyList<PlayModeOption> PlayModes { get; } = [new(SamplePlayMode.Loop, "LOOP"), new(SamplePlayMode.OneShot, "SHOT")];
@@ -158,10 +169,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _map = MidiMap.LoadOrCreate();
         _learn = new MidiLearn(_map);
 
-        DefaultPatch.Apply(_params);          // startup sound; later replaced by the pattern-palette system
+        _params.Set(GlobalParamId.MasterTuneCents, _settings.MasterTuneCents);   // system setting, not part of a palette
         _engine = new AudioEngine(DefaultSampleRate, _params, _bank, _noise);
         _callback.Engine = _engine;
         _router = new NoteRouter(() => Engine, _params) { MidiChannelToLayer = _midiChannelToLayer };
+        _noteTap = new NoteTap(this);
+        _router.Listener = _noteTap;
+        InitSettingsState();
+        AttachSequencer(_engine);
 
         _synthWaves = Enumerable.Range(1, WavetableBank.MaxWaves)
             .Select(i => WaveRecipes.TryGet(i, out var r) ? new WaveOption(i, r.ShortName, true) : new WaveOption(i, "", false))
@@ -211,8 +226,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         for (int l = 0; l < ParameterStore.MaxLayers; l++)
         {
             int layer = l;
-            var strip = new LayerStripViewModel(l, $"L{l + 1} {DefaultPatch.LayerNames[l]}", _params.Get(l, ParamId.Mute) >= 0.5f,
-                SelectLayer, (li, m) => Engine.SetParam(li, ParamId.Mute, m ? 1 : 0));
+            var strip = new LayerStripViewModel(l, $"L{l + 1} {DefaultPatch.LayerNames[l]}", _params.GetBase(l, ParamId.Mute) >= 0.5f,
+                SelectLayer, (li, m) => ApplyLayerParam(li, ParamId.Mute, m ? 1 : 0));
             AddStripKnob(strip, "LEVEL", ParamId.Level, v => FormatDb(ParamCurves.LevelGain((float)v)));
             AddStripKnob(strip, "PAN", ParamId.Pan, FormatPan, bipolar: true);
             AddStripKnob(strip, "REVERB", ParamId.ReverbSend, v => $"{v:0}");
@@ -221,16 +236,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
 
         MasterKnob = AddGlobalKnob("VOL", GlobalParamId.MasterVolume, v => FormatDb(ParamCurves.LevelGain((float)v)));
+        PatternLevelKnob = AddGlobalKnob("PTN LVL", GlobalParamId.PatternLevel, v => FormatDb(ParamCurves.LevelGain((float)v)));
+        MasterTuneKnob = AddGlobalKnob("MASTER TUNE", GlobalParamId.MasterTuneCents, v => TuningLabels.FormatMaster(v, ShowMasterHz), bipolar: true,
+            onChange: v => { _settings.MasterTuneCents = (float)v; MarkSettingsDirty(); });
+        TuneAllKnob = AddGlobalKnob("TUNE ALL", GlobalParamId.TuneAllCents, v => TuningLabels.FormatCents(v), bipolar: true);
+        TemperamentChoice = new ParamChoiceViewModel("TEMPERAMENT",
+            TuningLabels.TemperamentNames.Select((n, i) => new ChoiceOption(i, n)), v => Engine.SetGlobal(GlobalParamId.Temperament, v));
+        TemperamentChoice.UserChanged += _ => RefreshTuningUi();
+        TuningKeyChoice = Choice("KEY", ParamId.TuningKey, TuningLabels.KeyLabels(Temperament.Equal));
+        RndStepChoice = Choice("RND STEP", ParamId.RndStep, RndStepNames);
         ReverbMixKnob = AddGlobalKnob("MIX", GlobalParamId.ReverbMix, v => $"{v:0}");
         FxSpeedKnob = AddGlobalKnob("SPEED", GlobalParamId.FxSpeed, v => $"{v:0}");
         FxAmountKnob = AddGlobalKnob("AMOUNT", GlobalParamId.FxAmount, v => $"{v:0}");
         ApplyFxLabels();
 
         _bank.EnsureBuiltAsync(WavetableBank.FallbackIndex);
-        for (int l = 0; l < ParameterStore.NoiseLayerIndex; l++) _bank.EnsureBuiltAsync((int)_params.Get(l, ParamId.Wave));
-        _noise.EnsureBuiltAsync((int)_params.Get(ParameterStore.NoiseLayerIndex, ParamId.Wave));
+        for (int l = 0; l < ParameterStore.NoiseLayerIndex; l++) _bank.EnsureBuiltAsync((int)_params.GetBase(l, ParamId.Wave));
+        _noise.EnsureBuiltAsync((int)_params.GetBase(ParameterStore.NoiseLayerIndex, ParamId.Wave));
 
         SelectLayer((int)_params.Get(GlobalParamId.SelectedLayer) - 1);
+        LoadStartupPalette();
 
         StartMidi();
         try
@@ -277,7 +302,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         var info = ParamTable.Get(id);
         var k = new ParamKnobViewModel(label, id.ToString(), info.Min, info.Max, info.Default, bipolar, format,
-            v => Engine.SetParam(SelIdx, id, (float)v), _params.Get(0, id));
+            v => ApplyLayerParam(SelIdx, id, (float)v), _params.GetBase(0, id));
         WireMidiCommands(k);
         _selKnobs.Add(k);
         _knobsByTarget[k.MidiTarget] = k;
@@ -285,11 +310,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     private ParamChoiceViewModel Choice(string label, ParamId id, IReadOnlyList<string> names)
-        => new(label, names.Select((n, i) => new ChoiceOption(i, n)), v => Engine.SetParam(SelIdx, id, v));
+        => new(label, names.Select((n, i) => new ChoiceOption(i, n)), v => ApplyLayerParam(SelIdx, id, v));
 
     private LfoPanelViewModel CreateLfo(int n, ParamId shape, ParamId assign, ParamId trig, ParamId rate, ParamId depth)
     {
-        var assignChoice = new ParamChoiceViewModel("ASSIGN", AssignOptions(n, false), v => Engine.SetParam(SelIdx, assign, v));
+        var assignChoice = new ParamChoiceViewModel("ASSIGN", AssignOptions(n, false), v => ApplyLayerParam(SelIdx, assign, v));
         return new LfoPanelViewModel($"LFO {n}", Choice("SHAPE", shape, LfoShapes.Names), assignChoice,
             Choice("TRIG", trig, TrigNames),
             AddSelKnob("RATE", rate, v => $"{v:0}"), AddSelKnob("DEPTH", depth, v => $"{v:0}"));
@@ -369,16 +394,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         int layer = strip.Index;
         var info = ParamTable.Get(id);
         var k = new ParamKnobViewModel(label, id.ToString(), info.Min, info.Max, info.Default, bipolar, format,
-            v => Engine.SetParam(layer, id, (float)v), _params.Get(layer, id));
+            v => ApplyLayerParam(layer, id, (float)v), _params.GetBase(layer, id));
         WireMidiCommands(k);
         strip.Knobs.Add(k);
     }
 
-    private ParamKnobViewModel AddGlobalKnob(string label, GlobalParamId id, Func<double, string> format)
+    private ParamKnobViewModel AddGlobalKnob(string label, GlobalParamId id, Func<double, string> format, bool bipolar = false,
+        Action<double>? onChange = null)
     {
         var info = ParamTable.Get(id);
-        var k = new ParamKnobViewModel(label, id.ToString(), info.Min, info.Max, info.Default, false, format,
-            v => Engine.SetGlobal(id, (float)v), _params.Get(id));
+        var k = new ParamKnobViewModel(label, id.ToString(), info.Min, info.Max, info.Default, bipolar, format,
+            v => { Engine.SetGlobal(id, (float)v); onChange?.Invoke(v); }, _params.Get(id));
         WireMidiCommands(k);
         _knobsByTarget[k.MidiTarget] = k;
         return k;
@@ -403,6 +429,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public void SelectLayer(int index)
     {
         index = Math.Clamp(index, 0, ParameterStore.MaxLayers - 1);
+        bool wasLoading = _loading;
         _loading = true;
         try
         {
@@ -414,44 +441,48 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             Knob("Harmonic").Label = IsNoiseLayer ? "NOISE↔SAMPLE" : "HARMONIC";
             Waves = IsNoiseLayer ? _noiseWaves : _synthWaves;
-            int wave = (int)_params.Get(index, ParamId.Wave);
+            int wave = (int)_params.GetBase(index, ParamId.Wave);
             SelectedWave = Waves[Math.Clamp(wave, 1, Waves.Count) - 1];
-            SelectedFilter = Filters[(int)_params.Get(index, ParamId.FilterType)];
-            Octave = (int)_params.Get(index, ParamId.Octave);
-            SelectedPlayMode = PlayModes[(int)_params.Get(index, ParamId.NoisePlayMode) >= 1 ? 1 : 0];
+            SelectedFilter = Filters[(int)_params.GetBase(index, ParamId.FilterType)];
+            Octave = (int)_params.GetBase(index, ParamId.Octave);
+            SelectedPlayMode = PlayModes[(int)_params.GetBase(index, ParamId.NoisePlayMode) >= 1 ? 1 : 0];
             Latched.DisplayLayer = index;
 
             // list parameters + knobs of the new layer (the structure must be known before the knob texts are formatted)
-            _structure = (int)_params.Get(index, ParamId.Structure);
+            _structure = (int)_params.GetBase(index, ParamId.Structure);
             StructureChoice.Load(_structure);
-            ModShapeChoice.Load((int)_params.Get(index, ParamId.ModShape));
+            ModShapeChoice.Load((int)_params.GetBase(index, ParamId.ModShape));
             LoadLfo(Lfo1, 1, index, ParamId.Lfo1Shape, ParamId.Lfo1Assign, ParamId.Lfo1Trig);
             LoadLfo(Lfo2, 2, index, ParamId.Lfo2Shape, ParamId.Lfo2Assign, ParamId.Lfo2Trig);
             VoiceModeChoice.Options[(int)VoiceMode.Unison].IsEnabled = !IsNoiseLayer;
-            int vmode = (int)_params.Get(index, ParamId.VoiceMode);
+            int vmode = (int)_params.GetBase(index, ParamId.VoiceMode);
             if (IsNoiseLayer && vmode == (int)VoiceMode.Unison)
             {
                 vmode = (int)VoiceMode.Poly;                  // UNISON does not exist on the NOISE layer
                 Engine.SetParam(index, ParamId.VoiceMode, vmode);
             }
             VoiceModeChoice.Load(vmode);
-            ArpTypeChoice.Load((int)_params.Get(index, ParamId.ArpType));
-            StepNoteChoice.Load((int)_params.Get(index, ParamId.StepNote));
+            ArpTypeChoice.Load((int)_params.GetBase(index, ParamId.ArpType));
+            StepNoteChoice.Load((int)_params.GetBase(index, ParamId.StepNote));
             RefreshVoiceUi();
             RefreshStructureUi();
-            foreach (var k in _selKnobs) k.Load(_params.Get(index, Enum.Parse<ParamId>(k.MidiTarget)));
+            foreach (var k in _selKnobs) k.Load(_params.GetBase(index, Enum.Parse<ParamId>(k.MidiTarget)));
+            RndStepChoice.Load((int)_params.GetBase(index, ParamId.RndStep));
+            SeqLengthValue = (int)_params.GetBase(index, ParamId.SeqLength);
+            RefreshTuningUi();
+            OnLayerSelectedForSteps(index);
         }
-        finally { _loading = false; }
+        finally { _loading = wasLoading; }
     }
 
     private void LoadLfo(LfoPanelViewModel lfo, int n, int layer, ParamId shape, ParamId assign, ParamId trig)
     {
-        lfo.Shape.Load((int)_params.Get(layer, shape));
+        lfo.Shape.Load((int)_params.GetBase(layer, shape));
         lfo.Assign.SetOptions(AssignOptions(n, IsNoiseLayer));
-        int stored = (int)_params.Get(layer, assign);
+        int stored = (int)_params.GetBase(layer, assign);
         int shown = lfo.Assign.Load(stored);
         if (shown != stored) Engine.SetParam(layer, assign, shown);     // destination not available on this layer: back to OFF
-        lfo.Trig.Load((int)_params.Get(layer, trig));
+        lfo.Trig.Load((int)_params.GetBase(layer, trig));
     }
 
     private void ApplyFxLabels()
@@ -484,41 +515,41 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnSelectedWaveChanged(WaveOption? value)
     {
         if (_loading || value is not { IsAvailable: true }) return;
-        Engine.SetParam(SelIdx, ParamId.Wave, value.Index);   // also requests the build
+        ApplyLayerParam(SelIdx, ParamId.Wave, value.Index);   // also requests the build
     }
 
     partial void OnSelectedFilterChanged(FilterOption value)
     {
-        if (!_loading) Engine.SetParam(SelIdx, ParamId.FilterType, (float)value.Type);
+        if (!_loading) ApplyLayerParam(SelIdx, ParamId.FilterType, (float)value.Type);
         _knobsByTarget.GetValueOrDefault("Resonance")?.RefreshDisplay();
     }
 
     partial void OnSelectedPlayModeChanged(PlayModeOption value)
     {
-        if (!_loading && value != null) Engine.SetParam(SelIdx, ParamId.NoisePlayMode, (float)value.Mode);
+        if (!_loading && value != null) ApplyLayerParam(SelIdx, ParamId.NoisePlayMode, (float)value.Mode);
     }
 
     partial void OnOctaveChanged(int value)
     {
-        if (!_loading) Engine.SetParam(SelIdx, ParamId.Octave, value);
+        if (!_loading) ApplyLayerParam(SelIdx, ParamId.Octave, value);
         OnPropertyChanged(nameof(OctaveText));
     }
 
     partial void OnSelectedReverbChanged(ReverbOption value)
     {
-        if (value != null) Engine.SetGlobal(GlobalParamId.ReverbType, (float)value.Type);
+        if (!_loading && value != null) Engine.SetGlobal(GlobalParamId.ReverbType, (float)value.Type);
     }
 
     partial void OnSelectedFxChanged(FxOption value)
     {
         if (value == null) return;
-        Engine.SetGlobal(GlobalParamId.FxType, (float)value.Type);
+        if (!_loading) Engine.SetGlobal(GlobalParamId.FxType, (float)value.Type);
         ApplyFxLabels();
     }
 
     partial void OnBpmChanged(decimal? value)
     {
-        if (value is { } v) Engine.SetGlobal(GlobalParamId.Bpm, (float)v);
+        if (!_loading && value is { } v) Engine.SetGlobal(GlobalParamId.Bpm, (float)v);
     }
 
     partial void OnMidiChannelToLayerChanged(bool value)
@@ -573,7 +604,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void HoldNote(int note, int velocity)
     {
         int layer = SelIdx;
-        int vel = velocity > 0 ? velocity : (int)_params.Get(layer, ParamId.Velocity);
+        int vel = velocity > 0 ? velocity : (int)_params.GetBase(layer, ParamId.Velocity);
         EngineHoldToggle(layer, note, vel);
         Latched.Toggle(layer, note);
     }
@@ -628,6 +659,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // New engine at the actual sample rate; parameters and wavetables are shared, so settings carry over.
                 var engine = new AudioEngine(rate, _params, _bank, _noise);
                 Volatile.Write(ref _engine, engine);
+                AttachSequencer(engine);                 // new sequencer on the new engine; the palette model is carried over
                 _callback.Engine = engine;
                 Notes.Clear();
             }
@@ -641,24 +673,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>One UI timer step (30 Hz). Public so a headless host can pump it.</summary>
+    public void Tick() => OnTick();
+
     private void OnTick()
     {
+        TickSequencer();
         foreach (var k in AllKnobs()) k.ApplyPendingMidi();
         foreach (var st in Strips)
         {
-            int w = (int)_params.Get(st.Index, ParamId.Wave);
+            int w = (int)_params.GetBase(st.Index, ParamId.Wave);
             if (st.Index == ParameterStore.NoiseLayerIndex)
                 st.WaveText = NoiseBank.DefaultNames[Math.Clamp(w, 1, NoiseBank.SlotCount) - 1];
             else
             {
                 string wave = WaveRecipes.TryGet(w, out var r) ? r.ShortName : $"W{w}";
-                int s = Math.Clamp((int)_params.Get(st.Index, ParamId.Structure), 0, StructureShortNames.Length - 1);
+                int s = Math.Clamp((int)_params.GetBase(st.Index, ParamId.Structure), 0, StructureShortNames.Length - 1);
                 st.WaveText = $"{StructureShortNames[s]} \u00b7 {wave}";
             }
         }
 
         // the engine may change the octave itself (DRONE structures): follow the store without writing back
-        int storeOctave = (int)_params.Get(SelIdx, ParamId.Octave);
+        int storeOctave = (int)_params.GetBase(SelIdx, ParamId.Octave);
         if (storeOctave != Octave)
         {
             _loading = true;
@@ -806,8 +842,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         }
 
-        if (_map.TryResolve(cc.Source, cc.Channel, cc.Controller, out var target) && ResolveKnob(target) is { } knob)
-            knob.SetFromMidi(cc.Value / 127.0);
+        if (_map.TryResolve(cc.Source, cc.Channel, cc.Controller, out var target))
+        {
+            if (MidiTargets.IsTransportTarget(target))
+            {
+                if (cc.Value >= 64) Dispatcher.UIThread.Post(() => ExecuteTransportTarget(target));   // momentary: a press
+            }
+            else if (ResolveKnob(target) is { } knob) knob.SetFromMidi(cc.Value / 127.0);
+        }
     }
 
     private void StartLearn(string? target)
@@ -832,6 +874,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public void Dispose()
     {
         _timer.Stop();
+        SaveSettingsNow();
         _portWatcher?.Dispose();
         _controller?.Dispose();
         _audio.Dispose();

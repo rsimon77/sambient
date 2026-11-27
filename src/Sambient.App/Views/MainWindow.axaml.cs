@@ -17,7 +17,7 @@ public partial class MainWindow : Window
         // Tunnel so that mapped letter keys are consumed before a focused ComboBox can use them for type-ahead.
         AddHandler(KeyDownEvent, OnKeyDownTunnel, RoutingStrategies.Tunnel);
         AddHandler(KeyUpEvent, OnKeyUpTunnel, RoutingStrategies.Tunnel);
-        Deactivated += (_, _) => ReleaseAllNotes();
+        Deactivated += (_, _) => { ReleaseAllNotes(); Vm?.ReleaseSequencerHolds(); };
         Closing += (_, _) => ReleaseAllNotes();
 
         DataContextChanged += (_, _) => AttachViewModel();
@@ -67,14 +67,45 @@ public partial class MainWindow : Window
 
     private bool TextInputFocused() => TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() is TextBox;
 
+    private readonly HashSet<Key> _shortcutsDown = new();
+
+    /// <summary>
+    /// Transport / sequencer shortcuts (none of these keys is a piano key): Space play/stop, Shift+Space natural stop, R REC,
+    /// M metronome, N PRM REC, Left/Right step cursor, Delete/Backspace clear step, 1-4 layer. Ignored while a text box has focus.
+    /// </summary>
+    private bool HandleShortcut(KeyEventArgs e)
+    {
+        var vm = Vm;
+        if (vm == null) return false;
+        var mods = e.KeyModifiers & ~KeyModifiers.Shift;
+        if (mods != KeyModifiers.None) return false;
+        bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        switch (e.Key)
+        {
+            case Key.Space: if (_shortcutsDown.Add(e.Key)) vm.TogglePlayStop(shift); return true;
+            case Key.R when !shift: if (_shortcutsDown.Add(e.Key)) vm.ToggleRecCommand.Execute(null); return true;
+            case Key.M when !shift: if (_shortcutsDown.Add(e.Key)) vm.ToggleMetroCommand.Execute(null); return true;
+            case Key.N when !shift: if (_shortcutsDown.Add(e.Key)) vm.TogglePrmRecCommand.Execute(null); return true;
+            case Key.Left: vm.MoveStepCursor(-1); return true;
+            case Key.Right: vm.MoveStepCursor(1); return true;
+            case Key.Delete or Key.Back: vm.ClearSelectedStep(); return true;
+            case Key.D1 or Key.D2 or Key.D3 or Key.D4 when !shift:
+                if (_shortcutsDown.Add(e.Key)) vm.SelectLayer(e.Key - Key.D1);
+                return true;
+        }
+        return false;
+    }
+
     private void OnKeyDownTunnel(object? sender, KeyEventArgs e)
     {
         if (_keys == null || TextInputFocused()) return;
+        if (HandleShortcut(e)) { e.Handled = true; return; }
         if (_keys.KeyDown(e)) e.Handled = true;
     }
 
     private void OnKeyUpTunnel(object? sender, KeyEventArgs e)
     {
+        if (_shortcutsDown.Remove(e.Key)) { e.Handled = true; return; }
         if (_keys == null) return;
         if (_keys.KeyUp(e)) e.Handled = true;
     }

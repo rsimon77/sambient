@@ -28,6 +28,10 @@ public static class FactoryPresets
         return Variation(d[idx % d.Length], idx);
     }
 
+    // Layer LEVEL curve (see ParamCurves.LevelGain): dB-linear from -60 dB at 0 to 0 dB at 63.5, then up to +6 dB at 127.
+    private static float KnobToDb(float k) => k <= 63.5f ? -60f * (1f - k / 63.5f) : 6f * (k - 63.5f) / 63.5f;
+    private static float DbToKnob(float db) => Math.Clamp(db <= 0f ? 63.5f * (1f + db / 60f) : 63.5f + db * 63.5f / 6f, 0f, 127f);
+
     private static readonly Temperament[] VarTemper =
     {
         Temperament.PureMajor, Temperament.PythagoreanSharp, Temperament.PureMinor, Temperament.Solfeggio, Temperament.PythagoreanFlat,
@@ -38,6 +42,7 @@ public static class FactoryPresets
     {
         var p = src.Clone();
         int v = idx % 7 + 1;
+        float trim = VarTrimDb[idx - 12];
         string baseName = src.Name.TrimEnd();
         p.Name = (baseName.Length > 6 ? baseName[..6] : baseName) + (idx / 10 % 10) + (idx % 10);
         var tmp = VarTemper[idx % VarTemper.Length];
@@ -50,16 +55,35 @@ public static class FactoryPresets
         if (p.GetGlobal(GlobalParamId.ReverbType) < 1) p.SetGlobal(GlobalParamId.ReverbType, (float)ReverbType.LargeM);
         for (int l = 0; l < 3; l++) p.SetLayer(l, ParamId.Harmonic, (p.GetLayer(l, ParamId.Harmonic) + 17 * v) % 128);
         for (int l = 0; l < 3; l++) p.SetLayer(l, ParamId.Cutoff, Math.Clamp(p.GetLayer(l, ParamId.Cutoff) + (v - 4) * 4, 30, 127));
+        for (int l = 0; l < 4; l++) p.SetLayer(l, ParamId.Level, DbToKnob(KnobToDb(p.GetLayer(l, ParamId.Level)) + trim));
         return p;
     }
+
+    /// <summary>
+    /// Loudness trim (dB, applied to all four layer levels) of the generated variations, indexed by slot index minus 12 (bank 1 slots 13..16,
+    /// then banks 2..4). A variation changes tuning, tempo, reverb type and cutoffs, which moves its loudness away from its source palette,
+    /// so each one is measured with <c>WaveDump --preset-report</c> and trimmed to about -24 dBFS RMS.
+    /// </summary>
+    private static readonly float[] VarTrimDb =
+    {
+        1.2f, 0.2f, -0.3f, -1.1f, 0.7f, -3.5f, 0.8f, -2.6f, -0.5f, 1.9f, -2.2f, -2.5f, -2.2f,
+        -4.1f, -2.8f, 0.3f, 5.4f, -3.3f, -3.4f, -3.4f, -2.9f, 3.1f, -0.3f, 6.7f, -1.8f, -3f,
+        -4.8f, -2.7f, 7.2f, -3.5f, -2.4f, -3.5f, -4f, -0.8f, -4.4f, 1.9f, 0.2f, 1.9f, 0.5f,
+        -2.4f, 2.2f, -2.8f, -0.4f, -0.1f, -2.4f, -1f, -0.3f, -0.3f, -2.2f, -0.7f, -2.8f, -0.5f,
+    };
 
     // ------------------------------------------------------------------ builder
 
     private sealed class B
     {
         public readonly PatternPalette P;
-        public B(string name, float bpm, ReverbType rvb, float rvbMix, MasterFxType fx, float fxSpeed, float fxAmt)
+        private readonly float _trimDb;
+
+        /// <param name="trimDb">Loudness trim of the whole palette in dB, applied to all four layer levels (the mix between layers is kept).
+        /// Chosen so the rendered palette sits at about -24 dBFS RMS (see <c>WaveDump --preset-report</c>).</param>
+        public B(string name, float bpm, ReverbType rvb, float rvbMix, MasterFxType fx, float fxSpeed, float fxAmt, float trimDb = 0)
         {
+            _trimDb = trimDb;
             P = new PatternPalette(name);
             P.SetGlobal(GlobalParamId.Bpm, bpm);
             P.SetGlobal(GlobalParamId.ReverbType, (float)rvb); P.SetGlobal(GlobalParamId.ReverbMix, rvbMix);
@@ -68,8 +92,9 @@ public static class FactoryPresets
             P.SetLayer(3, ParamId.NoisePlayMode, (float)Sambient.Dsp.Noise.SamplePlayMode.Loop);
         }
 
-        /// <summary>Preset levels are written relative to a quiet mix; +14 brings the palettes to a normal ambient loudness (RMS about -30 dBFS).</summary>
-        private static float Lv(float level) => Math.Min(level + 14f, 72f);
+        /// <summary>Preset levels are written relative to a quiet mix (+14 knob units, capped at 72), then trimmed by the palette's loudness trim.</summary>
+        private float Lv(float level) => DbToKnob(KnobToDb(Math.Min(level + 14f, 72f)) + _trimDb);
+
 
         public B Temper(Temperament t, params int[] keys)
         {
@@ -140,6 +165,9 @@ public static class FactoryPresets
 
     // ------------------------------------------------------------------ the twelve designed palettes
 
+    // Loudness: every palette carries a `trimDb` (all four layer levels, mix kept) so it renders at about -24 dBFS RMS with the peak well below the
+    // -3 dBFS soft clipper; the comment on each constructor line is the measured result (`WaveDump --preset-report --bank 1`, 30 s, first 4 s skipped).
+    // SLOWTIDE sits at -24.7 because its drone layer is already at the +6 dB LEVEL ceiling.
     private static PatternPalette[] BuildDesigned() =>
     [
         DeepDrift(), SlowTide(), GlassArp(), Morning(), Forest(), Chakra(), Planetary(), Nightfall(), Crystal(), RainDay(), Breathe(), Polymeter(),
@@ -148,7 +176,7 @@ public static class FactoryPresets
     // 1. DEEPDRFT: the classic ambient bed. Two drifting drones, a slow pad, rare bells, wind.
     private static PatternPalette DeepDrift()
     {
-        var b = new B("DEEPDRFT", 60, ReverbType.InfinityM, 88, MasterFxType.TapeDelay, 55, 30);
+        var b = new B("DEEPDRFT", 60, ReverbType.InfinityM, 88, MasterFxType.TapeDelay, 55, 30, trimDb: -3.6f);   // RMS -20.4 -> -24.0 dBFS, peak -12.5 dBFS
         b.Syn(0, Structure.Drone1, 3, 40, FilterType.LowPass, 70, 25, 90, 100, 60, -10, -1, 80, 0, detune: 77.5f).Mod(0, LfoShape.Sine, 18, 45)
          .Track(0, 8, Wh).Chord(0, 0, 4, 90, 36, 43).Chord(0, 4, 4, 90, 32, 39);
         b.Syn(1, Structure.Pad1, 8, 30, FilterType.LowPass, 88, 25, 70, 90, 54, 14, 0, 80, 35, detune: 85).Mod(1, LfoShape.Sine, 26, 55)
@@ -166,7 +194,7 @@ public static class FactoryPresets
     // 2. SLOWTIDE: sea, swelling pads in a minor-ninth cycle.
     private static PatternPalette SlowTide()
     {
-        var b = new B("SLOWTIDE", 50, ReverbType.LargeH, 80, MasterFxType.Chorus, 35, 40);
+        var b = new B("SLOWTIDE", 50, ReverbType.LargeH, 80, MasterFxType.Chorus, 35, 40, trimDb: 6.4f);   // RMS -30.4 -> -24.7 dBFS, peak -11.3 dBFS
         b.Syn(0, Structure.Drone2, 3, 30, FilterType.LowPass, 64, 20, 100, 105, 56, 0, -1, 70, 0, pitch: 0, detune: 70).Mod(0, LfoShape.LowTriangle, 25, 40)
          .Track(0, 4, Lg).Chord(0, 0, 1, 85, 33).Chord(0, 1, 1, 85, 29).Chord(0, 2, 1, 85, 31).Chord(0, 3, 1, 85, 28);
         b.Syn(1, Structure.Pad2, 8, 35, FilterType.LowPass, 82, 28, 105, 100, 55, -16, 0, 85, 50, detune: 80).Mod(1, LfoShape.Sine, 22, 50)
@@ -181,7 +209,7 @@ public static class FactoryPresets
     // 3. GLASSARP: generative arpeggios on a held chord, probability and harmonic p-locks.
     private static PatternPalette GlassArp()
     {
-        var b = new B("GLASSARP", 72, ReverbType.LargeM, 76, MasterFxType.TapeDelay, 70, 45);
+        var b = new B("GLASSARP", 72, ReverbType.LargeM, 76, MasterFxType.TapeDelay, 70, 45, trimDb: 4.0f);   // RMS -28.0 -> -24.0 dBFS, peak -12.1 dBFS
         b.Syn(0, Structure.Drone1, 3, 36, FilterType.LowPass, 66, 25, 85, 95, 52, -8, -1, 60, 0, detune: 73).Mod(0, LfoShape.Sine, 14, 35)
          .Track(0, 8, Wh).Chord(0, 0, 4, 85, 38).Chord(0, 4, 4, 85, 33);
         b.Syn(1, Structure.Pad1, 8, 28, FilterType.LowPass, 90, 25, 40, 80, 42, 16, 0, 75, 20, detune: 75).Arp(1, ArpType.UpDown)
@@ -198,7 +226,7 @@ public static class FactoryPresets
     // 4. MORNING: just-intonation major (PR.MJ in C): open fifths and major sevenths, bright and calm.
     private static PatternPalette Morning()
     {
-        var b = new B("MORNING", 66, ReverbType.LargeL, 78, MasterFxType.Off, 64, 0);
+        var b = new B("MORNING", 66, ReverbType.LargeL, 78, MasterFxType.Off, 64, 0, trimDb: -1.4f);   // RMS -22.6 -> -24.0 dBFS, peak -12.3 dBFS
         b.Temper(Temperament.PureMajor, 0, 0, 0, 0);
         b.Syn(0, Structure.Drone2, 3, 34, FilterType.LowPass, 72, 20, 90, 100, 56, 0, -1, 70, 0, detune: 72)
          .Track(0, 8, Wh).Chord(0, 0, 4, 85, 36, 43).Chord(0, 4, 4, 85, 41, 48);
@@ -213,7 +241,7 @@ public static class FactoryPresets
     // 5. FORESTRN: noise-led texture; the noise sample changes per step through WAVE locks (forest / wind / rain / woods).
     private static PatternPalette Forest()
     {
-        var b = new B("FORESTRN", 58, ReverbType.SmallH, 70, MasterFxType.TiltEq, 50, 40);
+        var b = new B("FORESTRN", 58, ReverbType.SmallH, 70, MasterFxType.TiltEq, 50, 40, trimDb: 4.9f);   // RMS -28.9 -> -24.0 dBFS, peak -12.1 dBFS
         b.Temper(Temperament.Solfeggio, 4, 4, 4, 4);       // 528 Hz
         b.Syn(0, Structure.Drone1, 3, 30, FilterType.LowPass, 62, 25, 95, 100, 50, -6, -1, 70, 0, detune: 76).Track(0, 4, Lg).Chord(0, 0, 1, 80, 36).Chord(0, 2, 1, 80, 38);
         b.Syn(1, Structure.Pad1, 21, 36, FilterType.LowPass, 80, 30, 80, 95, 40, 12, 0, 85, 35, detune: 70).Mod(1, LfoShape.SmoothRandom, 20, 45)
@@ -230,7 +258,7 @@ public static class FactoryPresets
     // 6. CHAKRA: Chakra temperament (C4 = 320 Hz), a long meditative drone cycle.
     private static PatternPalette Chakra()
     {
-        var b = new B("CHAKRA", 54, ReverbType.InfinityL, 84, MasterFxType.Off, 64, 0);
+        var b = new B("CHAKRA", 54, ReverbType.InfinityL, 84, MasterFxType.Off, 64, 0, trimDb: 1.2f);   // RMS -25.2 -> -24.0 dBFS, peak -13.2 dBFS
         b.Temper(Temperament.Chakra, 2, 2, 2, 2);
         b.Syn(0, Structure.Drone2, 3, 30, FilterType.LowPass, 66, 20, 100, 110, 58, 0, -1, 75, 0, detune: 70).Mod(0, LfoShape.LowSine, 20, 35)
          .Track(0, 2, Lg).Chord(0, 0, 2, 85, 36, 43);
@@ -245,7 +273,7 @@ public static class FactoryPresets
     // 7. PLNTARY: Planetary temperament (4th planet pitch), airy bells over a drone.
     private static PatternPalette Planetary()
     {
-        var b = new B("PLNTARY", 62, ReverbType.LargeM, 82, MasterFxType.ReverseDelay, 60, 35);
+        var b = new B("PLNTARY", 62, ReverbType.LargeM, 82, MasterFxType.ReverseDelay, 60, 35, trimDb: 0f);   // RMS -23.9 -> -23.9 dBFS, peak -10.2 dBFS
         b.Temper(Temperament.Planetary, 3, 3, 3, 3);
         b.Syn(0, Structure.Drone1, 3, 44, FilterType.LowPass, 68, 25, 95, 100, 54, 0, -1, 80, 0, detune: 80).Mod(0, LfoShape.Sine, 12, 50)
          .Track(0, 4, Lg).Chord(0, 0, 2, 85, 36, 43).Chord(0, 2, 2, 85, 34, 41);
@@ -262,7 +290,7 @@ public static class FactoryPresets
     // 8. NIGHTFALL: dark Pythagorean (flat) minor drone with slow overdrive-warmed pad.
     private static PatternPalette Nightfall()
     {
-        var b = new B("NIGHTFAL", 48, ReverbType.InfinityL, 92, MasterFxType.Overdrive, 40, 25);
+        var b = new B("NIGHTFAL", 48, ReverbType.InfinityL, 92, MasterFxType.Overdrive, 40, 25, trimDb: -2.2f);   // RMS -21.8 -> -23.9 dBFS, peak -13.3 dBFS
         b.Temper(Temperament.PythagoreanFlat, 0, 0, 0, 0);
         b.Syn(0, Structure.Drone1, 3, 50, FilterType.LowPass, 56, 30, 100, 110, 60, 0, -2, 70, 0, detune: 82).Mod(0, LfoShape.Sine, 14, 55)
          .Track(0, 4, Lg).Chord(0, 0, 2, 90, 36, 43).Chord(0, 2, 2, 90, 31, 38);
@@ -278,7 +306,7 @@ public static class FactoryPresets
     // 9. CRYSTAL: high, sparse FM bells and a shimmering pad; pure minor tuning.
     private static PatternPalette Crystal()
     {
-        var b = new B("CRYSTAL", 84, ReverbType.InfinityH, 86, MasterFxType.TapeDelay, 66, 50);
+        var b = new B("CRYSTAL", 84, ReverbType.InfinityH, 86, MasterFxType.TapeDelay, 66, 50, trimDb: 12f);   // RMS -36.0 -> -24.8 dBFS, peak -11.1 dBFS
         b.Temper(Temperament.PureMinor, 9, 9, 9, 9);
         b.Syn(0, Structure.Pad1, 8, 36, FilterType.LowPass, 84, 25, 90, 100, 44, 0, 0, 80, 60, detune: 76).Mod(0, LfoShape.Sine, 24, 45)
          .Track(0, 8, Wh).Chord(0, 0, 4, 70, 57, 60, 64).Chord(0, 4, 4, 70, 53, 57, 60);
@@ -296,7 +324,7 @@ public static class FactoryPresets
     // 10. RAINDAY: rain bed, soft pad, a slow plucked-ish pattern.
     private static PatternPalette RainDay()
     {
-        var b = new B("RAINDAY", 68, ReverbType.SmallM, 66, MasterFxType.TapeDelay, 60, 38);
+        var b = new B("RAINDAY", 68, ReverbType.SmallM, 66, MasterFxType.TapeDelay, 60, 38, trimDb: 3.9f);   // RMS -27.9 -> -24.0 dBFS, peak -11.2 dBFS
         b.Syn(0, Structure.Drone2, 3, 30, FilterType.LowPass, 64, 20, 85, 95, 46, -6, -1, 60, 0, detune: 70).Track(0, 4, Lg).Chord(0, 0, 2, 80, 36).Chord(0, 2, 2, 80, 43);
         b.Syn(1, Structure.Pad1, 8, 26, FilterType.LowPass, 84, 28, 70, 90, 46, 10, 0, 75, 25, detune: 72).Mod(1, LfoShape.Sine, 22, 40)
          .Track(1, 8, Br).Chord(1, 0, 1, 70, 60, 64, 67, 71).Chord(1, 2, 1, 70, 57, 60, 64, 67).Chord(1, 4, 1, 70, 53, 57, 60, 64).Chord(1, 6, 1, 70, 55, 59, 62, 65);
@@ -311,7 +339,7 @@ public static class FactoryPresets
     // 11. BREATHE: a pad whose cutoff / harmonic move with step p-locks, like breathing.
     private static PatternPalette Breathe()
     {
-        var b = new B("BREATHE", 60, ReverbType.LargeM, 80, MasterFxType.Chorus, 30, 45);
+        var b = new B("BREATHE", 60, ReverbType.LargeM, 80, MasterFxType.Chorus, 30, 45, trimDb: 5.1f);   // RMS -29.1 -> -23.8 dBFS, peak -9.5 dBFS
         b.Syn(0, Structure.Drone1, 3, 36, FilterType.LowPass, 64, 25, 90, 100, 54, 0, -1, 70, 0, detune: 74).Track(0, 8, Wh).Chord(0, 0, 8, 85, 36, 43);
         b.Syn(1, Structure.Pad2, 8, 20, FilterType.LowPass, 50, 30, 60, 85, 54, 0, 0, 80, 40, detune: 76).Mod(1, LfoShape.Sine, 28, 40)
          .Track(1, 8, Wh).Chord(1, 0, 8, 80, 60, 63, 67, 70);
@@ -324,11 +352,12 @@ public static class FactoryPresets
     }
 
     // 12. POLYMETR: Eno-style loops of different lengths (3, 4, 5, 7 steps of 1/2): the combination only repeats after 420 steps.
+    // (The two pad loops use 2-step ties and velocity 95-100: with short, soft notes the palette was 14 dB too quiet and would have needed more than the LEVEL ceiling.)
     private static PatternPalette Polymeter()
     {
-        var b = new B("POLYMETR", 78, ReverbType.LargeM, 84, MasterFxType.TapeDelay, 58, 42);
-        b.Syn(0, Structure.Pad1, 8, 28, FilterType.LowPass, 80, 25, 50, 90, 46, -14, 0, 80, 30, detune: 74).Track(0, 3, Hf).Chord(0, 0, 1, 75, 60).Chord(0, 1, 1, 70, 67);
-        b.Syn(1, Structure.Pad1, 22, 44, FilterType.LowPass, 86, 25, 50, 90, 44, 14, 0, 80, 40, detune: 76).Track(1, 4, Hf).Chord(1, 0, 1, 70, 64).Chord(1, 2, 1, 70, 69);
+        var b = new B("POLYMETR", 78, ReverbType.LargeM, 84, MasterFxType.TapeDelay, 58, 42, trimDb: 4.8f);   // RMS -38.3 -> -24.0 dBFS, peak -8.9 dBFS
+        b.Syn(0, Structure.Pad1, 8, 28, FilterType.LowPass, 80, 25, 50, 90, 46, -14, 0, 80, 30, detune: 74).Track(0, 3, Hf).Chord(0, 0, 2, 100, 60).Chord(0, 1, 2, 95, 67);
+        b.Syn(1, Structure.Pad1, 22, 44, FilterType.LowPass, 86, 25, 50, 90, 44, 14, 0, 80, 40, detune: 76).Track(1, 4, Hf).Chord(1, 0, 2, 95, 64).Chord(1, 2, 2, 95, 69);
         b.Syn(2, Structure.Atmos2, 25, 24, FilterType.BandPass, 94, 32, 6, 95, 36, 0, 1, 90, 50,
             pitch: Sambient.Dsp.Params.ParamCurves.Atmos2RatioToPitch(3.0f), detune: 26, bal: 52)
          .Track(2, 5, Hf).Chord(2, 0, 1, 66, 72).Chord(2, 2, 1, 62, 76).Chord(2, 3, 1, 64, 79).Prob(2, 2, 70).Prob(2, 3, 70);

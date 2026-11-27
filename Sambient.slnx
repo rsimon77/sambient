@@ -8,6 +8,7 @@
     <Project Path="src/Sambient.Seq/Sambient.Seq.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Sambient.App.Tests/Sambient.App.Tests.csproj" />
     <Project Path="tests/Sambient.Tests/Sambient.Tests.csproj" />
     <Project Path="tests/Sambient.Control.Tests/Sambient.Control.Tests.csproj" />
   </Folder>

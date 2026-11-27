@@ -1,0 +1,47 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Sambient.App.ViewModels"
+             x:Class="Sambient.App.Views.ChainPanel"
+             x:DataType="vm:MainViewModel">
+  <StackPanel Spacing="8">
+    <WrapPanel>
+      <ToggleButton Classes="small amber" Content="CHAIN EDIT" IsChecked="{Binding ChainEdit}" Margin="0,0,8,6"
+                    ToolTip.Tip="While on, clicking a slot in the pattern browser appends it to the chain" />
+      <ToggleButton Classes="small blue" Content="LOOP" IsChecked="{Binding ChainLoop}" Margin="0,0,8,6" ToolTip.Tip="Start over after the last palette" />
+      <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,8,6">
+        <TextBlock Text="REPEATS" Classes="caption" VerticalAlignment="Center" />
+        <NumericUpDown Value="{Binding Repeats}" Minimum="{Binding RepeatsMinimum}" Maximum="{Binding RepeatsMaximum}" Increment="1"
+                       FormatString="0" Width="100" ToolTip.Tip="Pattern cycles per palette (1..99; Relaxation 2..10)" />
+      </StackPanel>
+      <ToggleButton Classes="small blue" Content="RELAXATION" IsChecked="{Binding RelaxationOn}" Margin="0,0,8,6"
+                    ToolTip.Tip="After the repeats the sound fades out, then the next palette fades in" />
+      <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,8,6" IsVisible="{Binding RelaxationOn}">
+        <TextBlock Text="FADE" Classes="caption" VerticalAlignment="Center" />
+        <ComboBox ItemsSource="{Binding FadeOptions}" SelectedItem="{Binding FadeSeconds, Mode=TwoWay}" MinWidth="72" />
+        <TextBlock Text="s" Classes="caption" VerticalAlignment="Center" />
+      </StackPanel>
+      <ToggleButton Classes="small blue" Content="R.RST" IsChecked="{Binding ResetReverb}" Margin="0,0,8,6"
+                    ToolTip.Tip="Reset the reverb on every palette change (off: only when the reverb type changes)" />
+      <Button Classes="small playing" Content="{Binding PlayChainText}" Command="{Binding PlayOrStopChainCommand}" Margin="0,0,8,6" />
+      <Button Classes="small" Content="CLEAR" Command="{Binding ClearChainItemsCommand}" Margin="0,0,8,6" />
+    </WrapPanel>
+    <ItemsControl ItemsSource="{Binding ChainItems}">
+      <ItemsControl.ItemsPanel>
+        <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+      </ItemsControl.ItemsPanel>
+      <ItemsControl.ItemTemplate>
+        <DataTemplate x:DataType="vm:ChainItemViewModel">
+          <Border Background="#252932" CornerRadius="5" Padding="8,3" Margin="0,0,6,6">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+              <TextBlock Text="{Binding Text}" VerticalAlignment="Center" FontFamily="Menlo, Consolas, monospace" FontSize="12" />
+              <Button Classes="small" Padding="5,0" MinWidth="22" Content="&#x25C0;" Command="{Binding UpCommand}" ToolTip.Tip="Move earlier" />
+              <Button Classes="small" Padding="5,0" MinWidth="22" Content="&#x25B6;" Command="{Binding DownCommand}" ToolTip.Tip="Move later" />
+              <Button Classes="small" Padding="5,0" MinWidth="22" Content="&#x2715;" Command="{Binding RemoveCommand}" ToolTip.Tip="Remove from chain" />
+            </StackPanel>
+          </Border>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+    <TextBlock Text="{Binding ChainStatusText}" Foreground="#7be495" />
+  </StackPanel>
+</UserControl>
