@@ -28,6 +28,9 @@ public enum LfoWave
 /// Discontinuous shapes are slewed (time constant = min(3 ms, 1/50 of the period)) so a destination never clicks; the slew
 /// shrinks with the period so audio-rate use (ring modulation) keeps its edges.
 ///
+/// Shape changes (when <see cref="MorphShapeChanges"/> is set, as the engine does): the output is crossfaded from the value it had
+/// at the switch to the new shape's output over ~15 ms, so a destination never steps. A <see cref="Reset"/> cancels the morph.
+///
 /// Trigger: <see cref="TrigOff"/> (0) = free-running (<see cref="Retrigger"/> does nothing), <see cref="TrigInf"/> (9) = restart
 /// the phase on every <see cref="Retrigger"/>, 1..8 = after a retrigger run that many cycles, then HOLD the final value.
 /// </summary>
@@ -47,10 +50,18 @@ public struct Lfo
     private bool _hold;
     private float _a, _b;          // random values of the current / next cycle
     private float _out, _slew;     // slewed output, one-pole coefficient (1 = no slew)
+    private float _morphFrom;      // output at the moment of a shape change
+    private int _morphLeft, _morphTotal;
+    private bool _used;            // Next() has run at least once (the very first Configure never morphs)
+
+    /// <summary>When true a change of shape is crossfaded over ~15 ms instead of stepping (engine use; off for plain DSP use).</summary>
+    public bool MorphShapeChanges;
 
     public Lfo(float sampleRate, uint seed)
     {
         _fs = sampleRate;
+        _morphTotal = Math.Max(1, (int)(sampleRate * 0.015f));
+        _morphLeft = 0; _morphFrom = 0f; _used = false; MorphShapeChanges = false;
         _rng = seed * 2654435761u + 0x9E3779B9u;
         if (_rng == 0) _rng = 0x1234567u;
         _wave = LfoWave.Sine; _base = LfoWave.Sine;
@@ -64,7 +75,7 @@ public struct Lfo
     }
 
     /// <summary>Current (already slewed) output of the last <see cref="Next"/>.</summary>
-    public readonly float Value => _out;
+    public readonly float Value => _morphLeft > 0 ? Blend(_out) : _out;
     public readonly bool IsHolding => _hold;
     public readonly double Phase => _phase;
     public readonly int CompletedCycles => _cycles;
@@ -74,6 +85,7 @@ public struct Lfo
     {
         _trig = Math.Clamp(trig, TrigOff, TrigInf);
         if (wave == _wave && rateHz == _rateHz) return;
+        if (wave != _wave && MorphShapeChanges && _used) { _morphFrom = Value; _morphLeft = _morphTotal; }
         _wave = wave;
         _base = wave switch
         {
@@ -107,6 +119,7 @@ public struct Lfo
     public void Reset()
     {
         _phase = 0; _cycles = 0; _hold = false;
+        _morphLeft = 0;
         _a = Rand(); _b = Rand();
     }
 
@@ -122,7 +135,21 @@ public struct Lfo
         float target = Evaluate(_base, (float)_phase, _a, _b);
         if (_slewed) _out += (target - _out) * _slew;
         else _out = target;
+        _used = true;
+        if (_morphLeft > 0)
+        {
+            float y = Blend(_out);
+            _morphLeft--;
+            return y;
+        }
         return _out;
+    }
+
+    /// <summary>Crossfade weight of the new shape = 1 - left/total (a cosine-free linear fade is enough at 15 ms).</summary>
+    private readonly float Blend(float v)
+    {
+        float w = 1f - (float)_morphLeft / _morphTotal;
+        return _morphFrom + (v - _morphFrom) * w;
     }
 
     /// <summary>Fills <paramref name="buffer"/> with consecutive output samples.</summary>

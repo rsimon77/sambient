@@ -67,16 +67,16 @@ public partial class MainViewModel
     partial void OnBpmGlobalChanged(bool value)
     {
         Seq.BpmMode = value ? BpmMode.Global : BpmMode.Pattern;
-        _settings.BpmGlobal = value; _settings.Save();
         OnPropertyChanged(nameof(BpmModeText));
+        PersistProjectSettings();
     }
-    partial void OnResetReverbChanged(bool value) { Seq.ResetReverbOnChange = value; _settings.ResetReverbOnChange = value; _settings.Save(); }
+    partial void OnResetReverbChanged(bool value) { Seq.ResetReverbOnChange = value; PersistProjectSettings(); }
     partial void OnRecArmedChanged(bool value) => Seq.RecordArmed = value;
     partial void OnOverwriteOnChanged(bool value) => Seq.OverwriteMode = value;
     partial void OnPrmRecOnChanged(bool value) => Seq.ParamRecordArmed = value;
     partial void OnMetroOnChanged(bool value) => Seq.MetronomeOn = value;
-    partial void OnMetroVolumeChanged(int value) { Seq.MetronomeVolume = value; _settings.MetronomeVolume = value; MarkSettingsDirty(); }
-    partial void OnPreCountChanged(int value) { Seq.PreCountBeats = value; _settings.PreCount = value; MarkSettingsDirty(); }
+    partial void OnMetroVolumeChanged(int value) { Seq.MetronomeVolume = value; PersistProjectSettings(); }
+    partial void OnPreCountChanged(int value) { Seq.PreCountBeats = value; PersistProjectSettings(); }
     partial void OnAutoStepChanged(bool value) { _settings.AutoStep = value; MarkSettingsDirty(); }
     partial void OnFollowPlayheadChanged(bool value) { _settings.FollowPlayhead = value; MarkSettingsDirty(); }
     partial void OnTieModeChanged(bool value)
@@ -87,7 +87,12 @@ public partial class MainViewModel
 
     partial void OnRndSeqOnChanged(bool value) { if (!_loading) Seq.SetRndSeq(value); }
     partial void OnTransposeValueChanged(decimal? value) { if (!_loading && value is { } v) Seq.SetTranspose((int)v); }
-    partial void OnMuteSeqChanged(bool value) { if (!_loading) Seq.MuteMode = value ? MuteMode.Sequence : MuteMode.Sound; }
+    partial void OnMuteSeqChanged(bool value)
+    {
+        if (_loading) return;
+        Seq.MuteMode = value ? MuteMode.Sequence : MuteMode.Sound;
+        PersistProjectSettings();
+    }
     partial void OnSeqLengthValueChanged(decimal? value)
     {
         if (_loading || value is not { } v) return;
@@ -103,12 +108,14 @@ public partial class MainViewModel
 #pragma warning disable MVVMTK0034
     private void InitSettingsState()
     {
-        _bpmGlobal = _settings.BpmGlobal;
-        _resetReverb = _settings.ResetReverbOnChange;
+        var ps = _session.Project.Settings;          // project-level settings come from the open project
+        _bpmGlobal = ps.BpmMode == BpmMode.Global;
+        _resetReverb = ps.ResetReverbOnChange;
         _autoStep = _settings.AutoStep;
         _followPlayhead = _settings.FollowPlayhead;
-        _metroVolume = _settings.MetronomeVolume;
-        _preCount = _settings.PreCount;
+        _metroVolume = ps.MetronomeVolume;
+        _preCount = ps.PreCount;
+        _selectedBufferFrames = _settings.AudioBufferFrames is 128 or 256 or 512 or 1024 ? _settings.AudioBufferFrames : 512;
         _showMasterHz = _settings.ShowMasterTuneHz;
         _expandSeq = _settings.IsExpanded("seq", true);
         _expandPatterns = _settings.IsExpanded("patterns", true);
@@ -216,6 +223,7 @@ public partial class MainViewModel
         finally { _loading = wasLoading; }
         RefreshPalettePanel();
         RefreshSteps();
+        _baselineValid = false;                  // the edit baseline of the live-edit dirty tracking is re-taken once the palette is applied
         if (Seq.CurrentBank >= 0 && (_settings.LastBank != Seq.CurrentBank || _settings.LastSlot != Seq.CurrentSlot))
         {
             _settings.LastBank = Seq.CurrentBank; _settings.LastSlot = Seq.CurrentSlot; MarkSettingsDirty();
@@ -245,7 +253,7 @@ public partial class MainViewModel
     [RelayCommand]
     private void Play()
     {
-        if (Seq.Chain.Active) Seq.ClearChain();
+        if (Seq.Chain.Active) Seq.ClearChain();       // normal PLAY plays the current pattern, not the song
         Seq.Play();
     }
 
@@ -299,6 +307,7 @@ public partial class MainViewModel
 
         if (_pendingRefresh && (seq.PaletteApplied || Environment.TickCount64 - _pendingSince > 1500)) RefreshAll();
         if (_settingsDirtyTicks > 0 && --_settingsDirtyTicks == 0) SaveSettingsNow();
+        TickProject();
 
         var state = seq.State;
         IsPlaying = state != TransportState.Stopped;

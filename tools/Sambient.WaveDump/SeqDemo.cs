@@ -10,7 +10,7 @@ internal static class SeqDemo
     {
         const double seconds = 45.0;
         var engine = new AudioEngine(Fs);
-        var bank = new PatternBank(Path.Combine(Path.GetTempPath(), "sambient-seqdemo-unused"));   // factory presets only, nothing is read or written
+        var bank = new PatternBank();   // factory presets only, nothing is read or written
         var seq = new Sequencer(engine, bank);
         var log = new List<string>();
         seq.Tap = e =>

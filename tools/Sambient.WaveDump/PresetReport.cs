@@ -22,7 +22,7 @@ internal static class PresetReport
         opts.TryGetValue("out-dir", out var outDir);
         if (outDir != null) Directory.CreateDirectory(outDir);
 
-        var bank = new PatternBank(Path.Combine(Path.GetTempPath(), "sambient-presetreport-unused"));
+        var bank = new PatternBank();
         Console.WriteLine("slot      name      RMS dB   LK dB   peak dB  loud3s dB  3s-RMS  voices");
         double sum = 0; int count = 0;
         for (int b = 0; b < PatternBank.PresetBanks; b++)

@@ -464,7 +464,8 @@ public class StructureModTests
         var rigC = new VoiceRig();
         rigC.Set(ParamId.Structure, (float)Structure.Drone1);
         rigC.Set(ParamId.Balance, 0);
-        rigC.Start(57); rigC.Run(512);
+        rigC.Start(57); rigC.Run(4800);                                       // BALANCE is smoothed (20 ms) when it changes
+        rigC.Run(512);
         Assert.Equal(1, rigC.Mod.OscillatorsRendered);                       // the silent oscillator is skipped
     }
 

@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using System.Windows.Input;
 using Sambient.App.Controls;
 using Sambient.App.ViewModels;
 
@@ -9,6 +10,8 @@ namespace Sambient.App.Views;
 public partial class MainWindow : Window
 {
     private ComputerKeyboard? _keys;
+    private bool _closeConfirmed;
+    private NativeMenuItem? _recentMenuItem;
 
     public MainWindow()
     {
@@ -18,7 +21,8 @@ public partial class MainWindow : Window
         AddHandler(KeyDownEvent, OnKeyDownTunnel, RoutingStrategies.Tunnel);
         AddHandler(KeyUpEvent, OnKeyUpTunnel, RoutingStrategies.Tunnel);
         Deactivated += (_, _) => { ReleaseAllNotes(); Vm?.ReleaseSequencerHolds(); };
-        Closing += (_, _) => ReleaseAllNotes();
+        Closing += OnWindowClosing;
+        Opened += OnWindowOpened;
 
         DataContextChanged += (_, _) => AttachViewModel();
     }
@@ -53,10 +57,116 @@ public partial class MainWindow : Window
             };
         }
 
+        vm.Dialogs = new AvaloniaProjectDialogs(this);
+        BuildFileMenu(vm);
+        vm.RecentChanged += () => RebuildRecentMenu(vm);
+        RebuildRecentMenu(vm);
+        var recent = this.FindControl<Button>("RecentButton");
+        if (recent != null) recent.Click += (_, _) => ShowRecentFlyout(vm, recent);
+        var nameBox = this.FindControl<TextBox>("ProjectNameBox");
+        if (nameBox != null)
+        {
+            nameBox.LostFocus += (_, _) => vm.CommitProjectName();
+            nameBox.KeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Enter) { vm.CommitProjectName(); Focus(); e.Handled = true; }
+                else if (e.Key == Key.Escape) { vm.ProjectNameEdit = vm.ProjectName; Focus(); e.Handled = true; }
+            };
+        }
+
         vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(MainViewModel.KeyboardVisible) && !vm.KeyboardVisible) ReleaseAllNotes();
         };
+    }
+
+    // ------------------------------------------------------------ File menu (system menu bar on macOS)
+
+    private static KeyModifiers Cmd => OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
+
+    private void BuildFileMenu(MainViewModel vm)
+    {
+        NativeMenuItem Item(string header, ICommand command, Key key, KeyModifiers extra = KeyModifiers.None)
+            => new(header) { Command = command, Gesture = new KeyGesture(key, Cmd | extra) };
+
+        _recentMenuItem = new NativeMenuItem("Open Recent") { Menu = new NativeMenu() };
+        var file = new NativeMenu
+        {
+            Item("New", vm.NewProjectCommand, Key.N),
+            Item("Open\u2026", vm.OpenProjectCommand, Key.O),
+            _recentMenuItem,
+            new NativeMenuItemSeparator(),
+            Item("Save", vm.SaveProjectCommand, Key.S),
+            Item("Save As\u2026", vm.SaveProjectAsCommand, Key.S, KeyModifiers.Shift),
+            new NativeMenuItem("Revert to Saved") { Command = vm.RevertProjectCommand },
+        };
+        var root = new NativeMenu { new NativeMenuItem("File") { Menu = file } };
+        NativeMenu.SetMenu(this, root);
+
+        if (!OperatingSystem.IsMacOS())
+        {
+            // no system menu bar: the same shortcuts as window key bindings
+            KeyBindings.Add(new KeyBinding { Gesture = new KeyGesture(Key.N, Cmd), Command = vm.NewProjectCommand });
+            KeyBindings.Add(new KeyBinding { Gesture = new KeyGesture(Key.O, Cmd), Command = vm.OpenProjectCommand });
+            KeyBindings.Add(new KeyBinding { Gesture = new KeyGesture(Key.S, Cmd), Command = vm.SaveProjectCommand });
+            KeyBindings.Add(new KeyBinding { Gesture = new KeyGesture(Key.S, Cmd | KeyModifiers.Shift), Command = vm.SaveProjectAsCommand });
+        }
+    }
+
+    private void RebuildRecentMenu(MainViewModel vm)
+    {
+        if (_recentMenuItem?.Menu is not { } menu) return;
+        menu.Items.Clear();
+        if (vm.RecentFiles.Count == 0) { menu.Items.Add(new NativeMenuItem("No Recent Projects") { IsEnabled = false }); return; }
+        foreach (var path in vm.RecentFiles)
+        {
+            var p = path;
+            var item = new NativeMenuItem(Path.GetFileNameWithoutExtension(p));
+            item.Click += (_, _) => _ = vm.OpenRecentAsync(p);
+            menu.Items.Add(item);
+        }
+    }
+
+    private void ShowRecentFlyout(MainViewModel vm, Avalonia.Controls.Control anchor)
+    {
+        var flyout = new MenuFlyout();
+        if (vm.RecentFiles.Count == 0) flyout.Items.Add(new MenuItem { Header = "No recent projects", IsEnabled = false });
+        foreach (var path in vm.RecentFiles)
+        {
+            var p = path;
+            var mi = new MenuItem { Header = Path.GetFileNameWithoutExtension(p) };
+            ToolTip.SetTip(mi, p);
+            mi.Click += (_, _) => _ = vm.OpenRecentAsync(p);
+            flyout.Items.Add(mi);
+        }
+        flyout.ShowAt(anchor);
+    }
+
+    // ------------------------------------------------------------ closing / startup
+
+    private void OnWindowClosing(object? sender, WindowClosingEventArgs e)
+    {
+        ReleaseAllNotes();
+        var vm = Vm;
+        if (_closeConfirmed || vm == null || !vm.HasUnsavedChanges) return;
+        e.Cancel = true;                                   // ask first (Save / Don't Save / Cancel), then close again
+        _ = ConfirmCloseAsync(vm);
+    }
+
+    private async Task ConfirmCloseAsync(MainViewModel vm)
+    {
+        bool ok;
+        try { ok = await vm.ConfirmCloseAsync(); }
+        catch (Exception) { ok = false; }
+        if (!ok) return;
+        _closeConfirmed = true;
+        Close();
+    }
+
+    private async void OnWindowOpened(object? sender, EventArgs e)
+    {
+        try { if (Vm is { } vm) await vm.RunStartupChecksAsync(); }
+        catch (Exception) { /* a failing startup check must never take the app down */ }
     }
 
     private void ReleaseAllNotes()

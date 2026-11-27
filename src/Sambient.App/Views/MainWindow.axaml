@@ -6,7 +6,7 @@
         xmlns:v="using:Sambient.App.Views"
         x:Class="Sambient.App.Views.MainWindow"
         x:DataType="vm:MainViewModel"
-        Title="Sambient" Width="1100" Height="800" MinWidth="860" MinHeight="560">
+        Title="{Binding WindowTitle}" Width="1100" Height="800" MinWidth="860" MinHeight="560">
   <Window.DataTemplates>
     <!-- list-parameter entries (combo boxes and segmented buttons) -->
     <DataTemplate x:DataType="vm:ChoiceOption">
@@ -112,23 +112,65 @@
   </Window.Styles>
   <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Margin="16">
 
-    <!-- Header -->
-    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" Margin="0,0,0,12">
-      <TextBlock Grid.Column="0" Text="SAMBIENT" FontSize="20" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,24,0" />
-      <ComboBox Grid.Column="1" ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"
-                HorizontalAlignment="Left" MinWidth="260" VerticalAlignment="Center">
-        <ComboBox.ItemTemplate>
-          <DataTemplate x:DataType="audio:AudioDeviceInfo">
-            <TextBlock Text="{Binding Name}" />
-          </DataTemplate>
-        </ComboBox.ItemTemplate>
-      </ComboBox>
-      <ToggleButton Grid.Column="2" Content="Keyboard" IsChecked="{Binding KeyboardVisible}" Margin="0,0,16,0" VerticalAlignment="Center" />
-      <c:Knob Grid.Column="5" Label="{Binding MasterKnob.Label}" Value="{Binding MasterKnob.Value, Mode=TwoWay}"
+    <!-- Header: title / audio device / audio settings / keyboard, then the project bar; master volume on the right -->
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,12">
+      <StackPanel Grid.Column="0" Spacing="8">
+        <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+          <TextBlock Grid.Column="0" Text="SAMBIENT" FontSize="20" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,24,0" />
+          <ComboBox Grid.Column="1" ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"
+                    HorizontalAlignment="Left" MinWidth="260" VerticalAlignment="Center">
+            <ComboBox.ItemTemplate>
+              <DataTemplate x:DataType="audio:AudioDeviceInfo">
+                <TextBlock Text="{Binding Name}" />
+              </DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
+          <Button Grid.Column="2" Classes="small" Content="Audio &#x25BE;" Margin="8,0,8,0" VerticalAlignment="Center"
+                  ToolTip.Tip="Audio settings: buffer size">
+            <Button.Flyout>
+              <Flyout Placement="BottomEdgeAlignedLeft">
+                <StackPanel Spacing="8" Width="280" x:DataType="vm:MainViewModel">
+                  <TextBlock Text="BUFFER SIZE (FRAMES)" Classes="caption" />
+                  <ComboBox ItemsSource="{Binding BufferOptions}" SelectedItem="{Binding SelectedBufferFrames}" HorizontalAlignment="Stretch" />
+                  <TextBlock Text="{Binding BufferHintText}" Classes="caption" />
+                  <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Foreground="#7be495" FontSize="12" />
+                  <TextBlock Classes="caption" TextWrapping="Wrap"
+                             Text="Larger buffers are more robust against clicks and dropouts but add latency. The stream restarts when you change it." />
+                </StackPanel>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+          <ToggleButton Grid.Column="3" Content="Keyboard" IsChecked="{Binding KeyboardVisible}" Margin="0,0,16,0" VerticalAlignment="Center" />
+        </Grid>
+        <!-- project bar -->
+        <Border Classes="panel" Padding="10,6">
+          <Grid ColumnDefinitions="Auto,Auto,Auto,*">
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" Margin="0,0,14,0">
+              <TextBlock Text="PROJECT" Classes="caption" VerticalAlignment="Center" />
+              <TextBox x:Name="ProjectNameBox" Text="{Binding ProjectNameEdit, Mode=TwoWay}" Width="190" MaxLength="64" VerticalAlignment="Center"
+                       ToolTip.Tip="Project name (Enter to rename)" />
+              <TextBlock Text="&#x25CF; unsaved" Foreground="#ffb454" FontSize="12" VerticalAlignment="Center" IsVisible="{Binding ProjectDirty}"
+                         ToolTip.Tip="The project has changes that are not saved to its file yet" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+              <Button Classes="small" Content="New" Command="{Binding NewProjectCommand}" ToolTip.Tip="New project (Cmd+N)" />
+              <Button Classes="small" Content="Open&#x2026;" Command="{Binding OpenProjectCommand}" ToolTip.Tip="Open a project (Cmd+O)" />
+              <Button x:Name="RecentButton" Classes="small" Content="Recent &#x25BE;" ToolTip.Tip="Open one of the 10 most recent projects" />
+              <Button Classes="small" Content="Save" Command="{Binding SaveProjectCommand}" ToolTip.Tip="Save the project (Cmd+S)" />
+              <Button Classes="small" Content="Save As&#x2026;" Command="{Binding SaveProjectAsCommand}" ToolTip.Tip="Save under a new name (Cmd+Shift+S)" />
+              <Button Classes="small" Content="Revert" Command="{Binding RevertProjectCommand}" ToolTip.Tip="Discard all changes and reload the saved file" />
+            </StackPanel>
+            <TextBlock Grid.Column="3" Text="{Binding ProjectPathText}" Classes="caption" VerticalAlignment="Center" HorizontalAlignment="Right"
+                       TextTrimming="PrefixCharacterEllipsis" Margin="14,0,0,0" />
+          </Grid>
+        </Border>
+      </StackPanel>
+      <c:Knob Grid.Column="1" Label="{Binding MasterKnob.Label}" Value="{Binding MasterKnob.Value, Mode=TwoWay}"
               Minimum="{Binding MasterKnob.Minimum}" Maximum="{Binding MasterKnob.Maximum}"
               DefaultValue="{Binding MasterKnob.DefaultValue}" DisplayText="{Binding MasterKnob.DisplayText}"
               IsLearning="{Binding MasterKnob.IsLearning}" MidiTarget="{Binding MasterKnob.MidiTarget}"
-              LearnCommand="{Binding MasterKnob.LearnCommand}" ClearMappingCommand="{Binding MasterKnob.ClearMappingCommand}" />
+              LearnCommand="{Binding MasterKnob.LearnCommand}" ClearMappingCommand="{Binding MasterKnob.ClearMappingCommand}"
+              VerticalAlignment="Center" Margin="16,0,0,0" />
     </Grid>
 
     <!-- Transport bar -->

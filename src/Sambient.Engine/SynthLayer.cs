@@ -49,6 +49,9 @@ public sealed class SynthLayer : ILayer, IVoiceSink, IModulatedLayer
     private float _octaveSemis, _bendRange;
     private readonly Tuning _tuning = new(semitoneOnly: false);
     private SmoothedValue _tuneAll;      // TUNE ALL in cents (smoothed, no zipper)
+    private SmoothedValue _octave;       // OCTAVE in semitones: a 5 ms phase-continuous ramp instead of an instant pitch step
+    private float _gPrev = -1f;        // output gain at the end of the previous sub-block (-1 = none yet)
+    private SmoothedValue _unisonGain;   // 0.5 in UNISON (4 voices per note), 1 otherwise: smoothed so a mode change never steps the level
 
     public int Index => _index;
     public int ActiveVoices { get; private set; }
@@ -71,6 +74,8 @@ public sealed class SynthLayer : ILayer, IVoiceSink, IModulatedLayer
         _pan = new SmoothedValue(parameters.Get(index, ParamId.Pan), sampleRate, 20f);
         _bend = new SmoothedValue(0f, sampleRate, 8f);
         _tuneAll = new SmoothedValue(parameters.Get(GlobalParamId.TuneAllCents), sampleRate, 25f);
+        _octave = new SmoothedValue(12f * parameters.Get(index, ParamId.Octave), sampleRate, 5f);
+        _unisonGain = new SmoothedValue(_ctl.Mode == VoiceMode.Unison ? UnisonGain : 1f, sampleRate, 20f);
         UpdateParams();
     }
 
@@ -293,7 +298,9 @@ public sealed class SynthLayer : ILayer, IVoiceSink, IModulatedLayer
         _tuning.Update((Temperament)(int)_params.Get(GlobalParamId.Temperament), (int)_params.Get(i, ParamId.TuningKey),
             _params.Get(GlobalParamId.MasterTuneCents));
         _tuneAll.SetTarget(_params.Get(GlobalParamId.TuneAllCents));
+        _unisonGain.SetTarget(_ctl.Mode == VoiceMode.Unison ? UnisonGain : 1f);
         _octaveSemis = _tuning.IsSpecial ? 0f : 12f * _params.Get(i, ParamId.Octave);
+        _octave.SetTarget(_octaveSemis);
         _bendRange = _params.Get(GlobalParamId.PitchBendRange);
 
         float a = _params.Get(i, ParamId.Attack), r = _params.Get(i, ParamId.Release);
@@ -330,8 +337,14 @@ public sealed class SynthLayer : ILayer, IVoiceSink, IModulatedLayer
         float h0 = _harm.Current;
         _harm.Skip(n);
         float h1 = _harm.Current;
-        _cutoff.Skip(n); _reso.Skip(n); _level.Skip(n); _pan.Skip(n); _bend.Skip(n); _tuneAll.Skip(n);
+        _cutoff.Skip(n); _reso.Skip(n); _level.Skip(n); _pan.Skip(n); _bend.Skip(n); _tuneAll.Skip(n); _octave.Skip(n); _unisonGain.Skip(n);
         _mod.BeginSub(n);       // layer-level LFO clocks (free-running even without voices) and send modulation
+
+        // output gain: ramped per sample from the previous sub-block's value (the LEVEL curve is dB-linear, so a knob step of a
+        // few units is a gain step of up to 2 dB: constant per sub-block it would zipper / click)
+        float gNew = ParamCurves.LevelGain(_level.Current) * VoiceMixScale * _unisonGain.Current;
+        float g0 = _gPrev < 0f ? gNew : _gPrev;
+        _gPrev = gNew;
 
         bool any = false;
         foreach (var v in _voices) if (v.Active) { any = true; break; }
@@ -341,7 +354,7 @@ public sealed class SynthLayer : ILayer, IVoiceSink, IModulatedLayer
         {
             Harmonic0 = h0,
             HarmonicStep = (h1 - h0) / n,
-            PitchSemis = _octaveSemis + _bend.Current * _bendRange + _tuneAll.Current * 0.01f,
+            PitchSemis = _octave.Current + _bend.Current * _bendRange + _tuneAll.Current * 0.01f,
             Filter = _filter,
             CutoffHz = ParamCurves.CutoffHz(_cutoff.Current),
             Q = ParamCurves.ResonanceQ(_reso.Current),
@@ -359,10 +372,11 @@ public sealed class SynthLayer : ILayer, IVoiceSink, IModulatedLayer
         foreach (var v in _voices)
             if (v.Active) v.Process(mix, mixR, n, in block);
 
-        float g = ParamCurves.LevelGain(_level.Current) * VoiceMixScale * (_ctl.Mode == VoiceMode.Unison ? UnisonGain : 1f);
+        float gs = (gNew - g0) / n, g = g0;
         int o = offset * 2;
         for (int i = 0; i < n; i++)
         {
+            g += gs;
             output[o++] += mix[i] * g;
             output[o++] += mixR[i] * g;
         }

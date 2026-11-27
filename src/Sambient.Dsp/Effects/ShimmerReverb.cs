@@ -123,7 +123,17 @@ public sealed class ShimmerReverb
         _mixTarget = x * MathF.Sqrt(x) * 1.5f; // perceptual curve, 127 = wet level about equal to the dry-equivalent level
     }
 
-    /// <summary>Clears all internal state (the "reverb reset" on pattern change).</summary>
+    /// <summary>
+    /// Click-free "reverb reset" (R.RST on a pattern change): fades the wet output out (~12 ms), clears all state and the
+    /// next block fades back in. Real-time safe.
+    /// </summary>
+    public void SoftReset()
+    {
+        if (Type == ReverbType.Off || !_active) { Clear(); return; }
+        if (!_resetPending) { _pendingType = Type; _resetPending = true; }
+    }
+
+    /// <summary>Clears all internal state immediately (offline use / tests; a running reverb should use <see cref="SoftReset"/>).</summary>
     public void Reset()
     {
         Clear();

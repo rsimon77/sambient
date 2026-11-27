@@ -7,8 +7,24 @@ internal abstract class FxBase
     protected readonly float Smooth;
     protected float Speed = 0.5f, Amount;
     protected bool Snap = true;
+    private float _inGain = 1f;
+    private readonly float _inStep;
 
-    protected FxBase(float fs) { Fs = fs; Smooth = FxMath.SmoothCoef(0.025f, fs); }
+    /// <summary>
+    /// Starts a ~15 ms fade-in of the signal that delay-line effects write into their (just cleared) buffers, so the first echo /
+    /// chorus tap never starts with a step. Called by <see cref="MasterFx"/> when it switches to this effect.
+    /// </summary>
+    public void StartFadeIn() => _inGain = 0f;
+
+    /// <summary>Per-sample input gain for the delay-line writes (1 unless <see cref="StartFadeIn"/> is running).</summary>
+    protected float NextInGain()
+    {
+        if (_inGain >= 1f) return 1f;
+        _inGain += _inStep;
+        return _inGain > 1f ? 1f : _inGain;
+    }
+
+    protected FxBase(float fs) { Fs = fs; Smooth = FxMath.SmoothCoef(0.025f, fs); _inStep = 1f / Math.Max(1f, 0.015f * fs); }
 
     public void SetSpeed(float s01) { Speed = s01; OnParams(); }
     public void SetAmount(float a01) { Amount = a01; OnParams(); }
@@ -84,7 +100,8 @@ internal sealed class TapeDelayFx : FxBase
 
             float inL = l[i], inR = r[i];
             _flip = -_flip;
-            float m = 0.5f * (inL + inR) + _flip;
+            float ig = NextInGain();
+            float m = 0.5f * (inL + inR) * ig + _flip;
             _bl[_w & _mask] = m + _fbS * fL;      // input enters the left line, feedback ping-pongs L -> R -> L
             _br[_w & _mask] = _fbS * fR + _flip;
             _w++;
@@ -139,8 +156,9 @@ internal sealed class ReverseDelayFx : FxBase
             _lpL += _lpA * (wetL - _lpL); _lpR += _lpA * (wetR - _lpR);
             _flip = -_flip;
             float inL = l[i], inR = r[i];
-            _bl[_w & _mask] = inL + _fbS * _lpL + _flip;
-            _br[_w & _mask] = inR + _fbS * _lpR + _flip;
+            float ig = NextInGain();
+            _bl[_w & _mask] = inL * ig + _fbS * _lpL + _flip;
+            _br[_w & _mask] = inR * ig + _fbS * _lpR + _flip;
             l[i] = inL + _mixS * wetL;
             r[i] = inR + _mixS * wetR;
             _w++;
@@ -407,7 +425,8 @@ internal sealed class ChorusFx : FxBase
         {
             _rateS += (_rateT - _rateS) * sm; _depthS += (_depthT - _depthS) * sm; _mixS += (_mixT - _mixS) * sm;
             float inc = _rateS / Fs;
-            _bl[_w & _mask] = l[i]; _br[_w & _mask] = r[i];
+            float ig = NextInGain();
+            _bl[_w & _mask] = l[i] * ig; _br[_w & _mask] = r[i] * ig;
             float wl = 0f, wr = 0f;
             for (int v = 0; v < 3; v++)
             {

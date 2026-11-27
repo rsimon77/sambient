@@ -640,14 +640,18 @@ public sealed class Sequencer : INoteListener
     }
 
     /// <summary>Starts the chain from its first palette (loaded at once), playing from step 1.</summary>
-    public bool PlayChain()
+    public bool PlayChain() => PlayChainFrom(0);
+
+    /// <summary>Starts the chain at entry <paramref name="startIndex"/> (clamped; loaded at once), playing from step 1; the chain continues from there.</summary>
+    public bool PlayChainFrom(int startIndex)
     {
         ChainPlan? plan;
         lock (_gate) plan = _plan;
         if (plan == null) return false;
-        lock (_gate) { _editing = plan.Items[0]; _pendingImmediate = plan.Items[0]; _queued = null; }
-        _core.Post(new SeqCommand { Type = CmdType.Load, Palette = plan.Items[0] });
-        _core.Post(new SeqCommand { Type = CmdType.SetChain, Chain = plan, A = 0 });
+        int i = Math.Clamp(startIndex, 0, plan.Items.Length - 1);
+        lock (_gate) { _editing = plan.Items[i]; _pendingImmediate = plan.Items[i]; _queued = null; }
+        _core.Post(new SeqCommand { Type = CmdType.Load, Palette = plan.Items[i] });
+        _core.Post(new SeqCommand { Type = CmdType.SetChain, Chain = plan, A = i });
         _core.Post(new SeqCommand { Type = CmdType.Play, A = 0 });
         return true;
     }

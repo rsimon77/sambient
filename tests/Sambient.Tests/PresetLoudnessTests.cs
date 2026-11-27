@@ -45,7 +45,7 @@ public class PresetLoudnessTests
     [Fact]
     public void HandDesignedPalettes_HaveConsistentLoudness()
     {
-        var bank = new PatternBank(Path.Combine(Path.GetTempPath(), "sambient-tests-loudness-" + Guid.NewGuid().ToString("N")));   // factory presets only
+        var bank = new PatternBank();   // factory presets only
         var failures = new List<string>();
         for (int slot = 0; slot < 12; slot++)
         {

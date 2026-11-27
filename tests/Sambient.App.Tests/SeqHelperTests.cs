@@ -177,7 +177,7 @@ public class SequencerWiringTests
     {
         var p1 = new ParameterStore();
         var e1 = new AudioEngine(48000, p1);
-        var bank = new PatternBank(Path.Combine(Path.GetTempPath(), "sambient-app-test-" + Guid.NewGuid().ToString("N")));
+        var bank = new PatternBank();
         var s1 = new Sequencer(e1, bank);
         s1.SelectPalette(0, 2);
         var buf = new float[512];
@@ -204,7 +204,7 @@ public class SequencerWiringTests
     {
         var p = new ParameterStore();
         var e = new AudioEngine(48000, p);
-        var s = new Sequencer(e, new PatternBank(Path.Combine(Path.GetTempPath(), "sambient-app-test-" + Guid.NewGuid().ToString("N"))));
+        var s = new Sequencer(e, new PatternBank());
         s.SetLayerParam(0, ParamId.Cutoff, 55);
         Assert.Equal(55, p.GetBase(0, ParamId.Cutoff));
         s.SetLock(0, 0, ParamId.Cutoff, 99);

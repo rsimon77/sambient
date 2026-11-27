@@ -78,22 +78,27 @@ public sealed partial class PatternSlotViewModel : ObservableObject
     }
 }
 
-public sealed class ChainItemViewModel
+public sealed partial class ChainItemViewModel : ObservableObject
 {
     public int Bank { get; }
     public int Slot { get; }
     public int Position { get; set; }
     public string Text { get; set; }
+    /// <summary>The entry PLAY SONG starts from (click an entry to select it).</summary>
+    [ObservableProperty] private bool _isSelected;
     public ICommand RemoveCommand { get; }
     public ICommand UpCommand { get; }
     public ICommand DownCommand { get; }
+    public ICommand SelectCommand { get; }
 
-    public ChainItemViewModel(int bank, int slot, string text, Action<ChainItemViewModel> remove, Action<ChainItemViewModel, int> move)
+    public ChainItemViewModel(int bank, int slot, string text, Action<ChainItemViewModel> remove, Action<ChainItemViewModel, int> move,
+        Action<ChainItemViewModel> select)
     {
         Bank = bank; Slot = slot; Text = text;
         RemoveCommand = new RelayCommand(() => remove(this));
         UpCommand = new RelayCommand(() => move(this, -1));
         DownCommand = new RelayCommand(() => move(this, 1));
+        SelectCommand = new RelayCommand(() => select(this));
     }
 }
 

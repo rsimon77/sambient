@@ -129,59 +129,41 @@ public class PatternJsonTests
 public class PatternBankTests
 {
     [Fact]
-    public void UserCopyWinsOverPresetAndCanBeReverted()
+    public void SavedCopyWinsOverPresetAndCanBeReverted()
     {
-        string dir = Path.Combine(Path.GetTempPath(), "sambient-bank-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            var bank = new PatternBank(dir);
-            Assert.True(bank.IsFactory(0, 2));
-            var factory = bank.Load(0, 2);
-            var mine = factory.Clone(); mine.Name = "MINE"; mine.SetLayer(0, ParamId.Cutoff, 5);
-            bank.Save(0, 2, mine);
-            Assert.True(File.Exists(Path.Combine(dir, "B1-03.json")));
-            Assert.False(bank.IsFactory(0, 2));
-            Assert.Equal("MINE", bank.Load(0, 2).Name.TrimEnd());
-            Assert.Equal("MINE", new PatternBank(dir).GetName(0, 2).TrimEnd());
-            Assert.True(bank.RevertToFactory(0, 2));
-            PatternJsonTests.AssertSame(factory, bank.Load(0, 2));
-            Assert.False(bank.RevertToFactory(0, 2));
-        }
-        finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+        var bank = new PatternBank();
+        Assert.True(bank.IsFactory(0, 2));
+        var factory = bank.Load(0, 2);
+        var mine = factory.Clone(); mine.Name = "MINE"; mine.SetLayer(0, ParamId.Cutoff, 5);
+        Assert.False(bank.Project.IsDirty);
+        bank.Save(0, 2, mine);
+        Assert.True(bank.Project.IsDirty);                       // the project is dirty; no file was written
+        Assert.False(bank.IsFactory(0, 2));
+        Assert.Equal("MINE", bank.Load(0, 2).Name.TrimEnd());
+        Assert.Equal("MINE", bank.GetName(0, 2).TrimEnd());
+        Assert.True(bank.RevertToFactory(0, 2));
+        PatternJsonTests.AssertSame(factory, bank.Load(0, 2));
+        Assert.False(bank.RevertToFactory(0, 2));
     }
 
     [Fact]
-    public void UserBanksStartAsInitAndSaveToTheirOwnFiles()
+    public void UserBanksStartAsInitAndKeepWhatWasSaved()
     {
-        string dir = Path.Combine(Path.GetTempPath(), "sambient-bank-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            var bank = new PatternBank(dir);
-            Assert.Equal("INIT", bank.Load(4, 0).Name.TrimEnd());
-            var p = bank.Load(7, 15); p.Name = "LAST"; p.Tracks[1].Steps[9].Notes.Add(StepNoteData.Make(55, 90, 2));
-            bank.Save(7, 15, p);
-            Assert.True(File.Exists(Path.Combine(dir, "B8-16.json")));
-            PatternJsonTests.AssertSame(p, bank.Load(7, 15));
-            Assert.Equal("B8-16", PatternBank.SlotId(7, 15));
-            Assert.Throws<ArgumentOutOfRangeException>(() => bank.Load(8, 0));
-        }
-        finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+        var bank = new PatternBank();
+        Assert.Equal("INIT", bank.Load(4, 0).Name.TrimEnd());
+        var p = bank.Load(7, 15); p.Name = "LAST"; p.Tracks[1].Steps[9].Notes.Add(StepNoteData.Make(55, 90, 2));
+        bank.Save(7, 15, p);
+        PatternJsonTests.AssertSame(p, bank.Load(7, 15));
+        Assert.Equal("B8-16", PatternBank.SlotId(7, 15));
+        Assert.Throws<ArgumentOutOfRangeException>(() => bank.Load(8, 0));
     }
 
     [Fact]
-    public void CorruptFileFallsBackToThePresetOrInit()
+    public void SavingAnUnchangedPaletteDoesNotDirtyTheProject()
     {
-        string dir = Path.Combine(Path.GetTempPath(), "sambient-bank-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            Directory.CreateDirectory(dir);
-            File.WriteAllText(Path.Combine(dir, "B1-01.json"), "{ broken");
-            File.WriteAllText(Path.Combine(dir, "B5-01.json"), "garbage");
-            var bank = new PatternBank(dir);
-            Assert.Equal(FactoryPresets.DesignedNames[0], bank.Load(0, 0).Name);
-            Assert.Equal("INIT", bank.Load(4, 0).Name.TrimEnd());
-        }
-        finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+        var bank = new PatternBank();
+        bank.Save(0, 0, bank.Load(0, 0));
+        Assert.False(bank.Project.IsDirty);
     }
 }
 
@@ -286,7 +268,7 @@ public class PaletteSwitchingTests
         // Save as elsewhere
         r.Seq.SaveAs(5, 7);
         Assert.Equal((5, 7), (r.Seq.CurrentBank, r.Seq.CurrentSlot));
-        Assert.True(File.Exists(Path.Combine(r.Dir, "B6-08.json")));
+        Assert.True(r.Seq.Bank.IsModified(5, 7));
         // Init
         r.Seq.Init(); r.Render(64);
         Assert.Equal(ParamTable.Get(ParamId.Harmonic).Default, r.Engine.Parameters.GetBase(0, ParamId.Harmonic));

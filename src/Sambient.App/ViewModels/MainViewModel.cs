@@ -4,6 +4,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Sambient.App.Controls;
+using Sambient.App.Projects;
 using Sambient.App.Settings;
 using Sambient.Audio;
 using Sambient.Control;
@@ -19,7 +20,7 @@ namespace Sambient.App.ViewModels;
 public partial class MainViewModel : ObservableObject, IDisposable
 {
     private const int DefaultSampleRate = 48000;
-    private const int DefaultFrames = 256;
+    private int BufferFrames => _settings.AudioBufferFrames is 128 or 256 or 512 or 1024 ? _settings.AudioBufferFrames : 512;
 
     private readonly PortAudioOutput _audio = new();
     private readonly ParameterStore _params = new();
@@ -102,6 +103,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public HeldNoteTracker Notes { get; } = new();
 
     [ObservableProperty] private AudioDeviceInfo? _selectedDevice;
+    /// <summary>Audio buffer size in frames (app setting; changing it reopens the stream).</summary>
+    [ObservableProperty] private int _selectedBufferFrames = 512;
+    public IReadOnlyList<int> BufferOptions { get; } = [128, 256, 512, 1024];
     [ObservableProperty] private string _status = "Audio not started";
     [ObservableProperty] private IReadOnlyList<WaveOption> _waves;
     [ObservableProperty] private WaveOption? _selectedWave;
@@ -163,13 +167,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public MainViewModel()
     {
         _settings = AppSettings.Load();
+        // The project (all 128 palettes, chains, project settings) is opened first: the last project, else Default, else the
+        // migration of the old per-slot palette files (see ProjectSession.Start).
+        _session = new ProjectSession(_patternBank, _settings, ProjectLocations.FromEnvironment()) { BeforeSave = () => CommitCurrentPalette() };
+        _startup = _session.Start();
         _keyboardVisible = _settings.KeyboardVisible;
         _keyboardOctave = _settings.KeyboardOctave;
         _midiChannelToLayer = _settings.MidiChannelToLayer;
         _map = MidiMap.LoadOrCreate();
         _learn = new MidiLearn(_map);
 
-        _params.Set(GlobalParamId.MasterTuneCents, _settings.MasterTuneCents);   // system setting, not part of a palette
+        _params.Set(GlobalParamId.MasterTuneCents, _session.Project.Settings.MasterTuneCents);   // project setting, not part of a palette
         _engine = new AudioEngine(DefaultSampleRate, _params, _bank, _noise);
         _callback.Engine = _engine;
         _router = new NoteRouter(() => Engine, _params) { MidiChannelToLayer = _midiChannelToLayer };
@@ -238,7 +246,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         MasterKnob = AddGlobalKnob("VOL", GlobalParamId.MasterVolume, v => FormatDb(ParamCurves.LevelGain((float)v)));
         PatternLevelKnob = AddGlobalKnob("PTN LVL", GlobalParamId.PatternLevel, v => FormatDb(ParamCurves.LevelGain((float)v)));
         MasterTuneKnob = AddGlobalKnob("MASTER TUNE", GlobalParamId.MasterTuneCents, v => TuningLabels.FormatMaster(v, ShowMasterHz), bipolar: true,
-            onChange: v => { _settings.MasterTuneCents = (float)v; MarkSettingsDirty(); });
+            onChange: _ => PersistProjectSettings());
         TuneAllKnob = AddGlobalKnob("TUNE ALL", GlobalParamId.TuneAllCents, v => TuningLabels.FormatCents(v), bipolar: true);
         TemperamentChoice = new ParamChoiceViewModel("TEMPERAMENT",
             TuningLabels.TemperamentNames.Select((n, i) => new ChoiceOption(i, n)), v => Engine.SetGlobal(GlobalParamId.Temperament, v));
@@ -253,9 +261,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _bank.EnsureBuiltAsync(WavetableBank.FallbackIndex);
         for (int l = 0; l < ParameterStore.NoiseLayerIndex; l++) _bank.EnsureBuiltAsync((int)_params.GetBase(l, ParamId.Wave));
         _noise.EnsureBuiltAsync((int)_params.GetBase(ParameterStore.NoiseLayerIndex, ParamId.Wave));
+        // JIT warm-up: render every engine code path once on a throw-away engine so the audio thread never JIT-compiles
+        // (a cold first use cost up to ~6.6 ms of the 10.7 ms callback budget). Own low-priority thread, NOT the
+        // BackgroundBuilder: WarmUp waits for SIN.S / noise slot 1, which are built on the BackgroundBuilder thread.
+        var warm = new Thread(() =>
+        {
+            try { EngineWarmUp.WarmUp(_bank, _noise); }
+            catch (Exception ex) { System.Diagnostics.Trace.WriteLine("Warm-up failed: " + ex.Message); }
+            // Start the audio stream only after the warm-up: while the warm-up thread JIT-compiles a method, an audio
+            // callback reaching the same method would block on it (measured: a 33 ms dropout at startup).
+            Dispatcher.UIThread.Post(() => { if (!_disposed && !_audio.IsOpen) OpenStream(); });
+        })
+        { IsBackground = true, Name = "Sambient warm-up", Priority = ThreadPriority.BelowNormal };
+        warm.Start();
 
         SelectLayer((int)_params.Get(GlobalParamId.SelectedLayer) - 1);
         LoadStartupPalette();
+        LoadChainFromProject();
 
         StartMidi();
         try
@@ -264,7 +286,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _opening = true;
             SelectedDevice = Devices.FirstOrDefault(d => d.IsDefault) ?? Devices.FirstOrDefault();
             _opening = false;
-            OpenStream();
+            Status = "Preparing audio engine…";   // the stream is opened when the JIT warm-up has finished (see above)
         }
         catch (Exception ex)
         {
@@ -274,6 +296,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(33), DispatcherPriority.Background, (_, _) => OnTick());
         _timer.Start();
+
+        _session.StateChanged += () => Interlocked.Exchange(ref _projectChanged, 1);
+        _patternBank.ProjectReplaced += OnProjectReplaced;
+        RefreshProjectState();
     }
 
     private AudioEngine Engine => Volatile.Read(ref _engine);
@@ -512,6 +538,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (!_opening && value != null) OpenStream();
     }
 
+    partial void OnSelectedBufferFramesChanged(int value)
+    {
+        if (value is not (128 or 256 or 512 or 1024)) return;
+        _settings.AudioBufferFrames = value;
+        MarkSettingsDirty();
+        OnPropertyChanged(nameof(BufferHintText));
+        if (!_opening) OpenStream();            // the status bar shows the resulting latency
+    }
+
+    /// <summary>Buffer duration at 48 kHz (the device adds its own latency; the status bar shows the total).</summary>
+    public string BufferHintText => $"{SelectedBufferFrames} frames = {SelectedBufferFrames * 1000.0 / DefaultSampleRate:0.0} ms per buffer";
+
     partial void OnSelectedWaveChanged(WaveOption? value)
     {
         if (_loading || value is not { IsAvailable: true }) return;
@@ -646,12 +684,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             _audio.Stop();
             int rate = DefaultSampleRate;
-            try { _audio.Open(dev.Id, rate, DefaultFrames, _callback); }
+            try { _audio.Open(dev.Id, rate, BufferFrames, _callback); }
             catch
             {
                 // Device does not support 48 kHz: fall back to its native rate.
                 rate = (int)dev.DefaultSampleRate;
-                _audio.Open(dev.Id, rate, DefaultFrames, _callback);
+                _audio.Open(dev.Id, rate, BufferFrames, _callback);
             }
 
             if (rate != _engine.SampleRate)
@@ -871,10 +909,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         MidiLearnStatus = $"Cleared MIDI mapping of {target}";
     }
 
+    private bool _disposed;
+
     public void Dispose()
     {
+        _disposed = true;
         _timer.Stop();
         SaveSettingsNow();
+        _session.Autosave.Clear();           // reached on a confirmed close only: unsaved changes were saved or deliberately dropped
         _portWatcher?.Dispose();
         _controller?.Dispose();
         _audio.Dispose();
