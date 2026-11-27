@@ -30,6 +30,8 @@ public sealed class AppSettings
     public float MasterTuneCents { get; set; }
     public bool AutoStep { get; set; }
     public bool FollowPlayhead { get; set; } = true;
+    /// <summary>The step sequencer panel shows the piano roll instead of the 16-step buttons.</summary>
+    public bool PianoRollView { get; set; }
     /// <summary>BPM mode GLBL (keep the current BPM when a palette loads); default PTN.</summary>
     public bool BpmGlobal { get; set; }
     public bool ResetReverbOnChange { get; set; }

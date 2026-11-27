@@ -113,6 +113,7 @@ public partial class MainViewModel
         _resetReverb = ps.ResetReverbOnChange;
         _autoStep = _settings.AutoStep;
         _followPlayhead = _settings.FollowPlayhead;
+        _pianoRollView = _settings.PianoRollView;
         _metroVolume = ps.MetronomeVolume;
         _preCount = ps.PreCount;
         _selectedBufferFrames = _settings.AudioBufferFrames is 128 or 256 or 512 or 1024 ? _settings.AudioBufferFrames : 512;
@@ -189,6 +190,7 @@ public partial class MainViewModel
     private void RefreshAll()
     {
         _pendingRefresh = false;
+        _roll?.History.Clear();                  // snapshots of the previous palette must not be restored into this one
         bool wasLoading = _loading;
         _loading = true;
         try
@@ -326,6 +328,7 @@ public partial class MainViewModel
                 CurrentPage = ph / StepGrid.StepsPerPage;
             UpdatePlayheadCells();
         }
+        TickRoll(ph, state);
 
         bool recording = RecArmed && state == TransportState.Playing;
         if (Interlocked.Exchange(ref _stepsDirty, 0) == 1 || (recording && _tickCount % 4 == 0)) RefreshSteps();
@@ -374,6 +377,7 @@ public partial class MainViewModel
             pg.IsSelected = pg.Value == CurrentPage;
         }
         RefreshStepDetails(snap);
+        PushTrackToRoll(snap);
     }
 
     private void UpdatePlayheadCells()
@@ -385,6 +389,7 @@ public partial class MainViewModel
     {
         foreach (var c in StepCells) c.IsSelected = c.Index == value && c.InLength;
         if (_lastTrack != null) RefreshStepDetails(_lastTrack);
+        if (_roll != null) { _roll.SelectedStep = value; _roll.RefreshSelection(); }
     }
 
     private void RefreshStepDetails(TrackSnapshot snap)
