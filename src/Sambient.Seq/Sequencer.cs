@@ -242,6 +242,54 @@ public sealed class Sequencer : INoteListener
         return ok;
     }
 
+    // ---- note-level editing (piano roll): precise operations, no toggling. Rules and conflict behaviour: see <see cref="NoteEditing"/>.
+
+    /// <summary>Removes one note of a step. False when the step has no such note.</summary>
+    public bool RemoveStepNote(int track, int step, int note)
+        => ApplyNoteEdits(track, [NoteEdit.Remove(step, note)]).Succeeded[0];
+
+    /// <summary>
+    /// Moves a note to another step and / or pitch, keeping velocity and tie (the tie is clamped so it does not pass the track end).
+    /// False - and nothing changes - when the note does not exist, the target is out of range, the target step already holds 8 notes
+    /// or the target already holds that pitch. Moving a note onto its own place succeeds.
+    /// </summary>
+    public bool MoveNote(int track, int fromStep, int note, int toStep, int toNote)
+        => ApplyNoteEdits(track, [NoteEdit.Move(fromStep, note, toStep, toNote)]).Succeeded[0];
+
+    /// <summary>Sets the tie length of one note (clamped to 1 .. steps left in the track). False when the note does not exist.</summary>
+    public bool SetNoteTie(int track, int step, int note, int tie)
+        => ApplyNoteEdits(track, [NoteEdit.SetTie(step, note, tie)]).Succeeded[0];
+
+    /// <summary>Sets the velocity (1..127) of one note. False when the note does not exist.</summary>
+    public bool SetNoteVelocity(int track, int step, int note, int velocity)
+        => ApplyNoteEdits(track, [NoteEdit.SetVelocity(step, note, velocity)]).Succeeded[0];
+
+    /// <summary>
+    /// Applies a group of note edits (moves, removes, adds, tie / velocity changes) atomically: one lock, one compile, one publish, so
+    /// the audio thread never sees a half-moved selection. Order and conflict rules: see <see cref="NoteEditing"/>.
+    /// </summary>
+    public NoteEditResult ApplyNoteEdits(int track, IReadOnlyList<NoteEdit> edits)
+    {
+        CheckTrack(track);
+        NoteEditResult? result = null;
+        Mutate(m => result = NoteEditing.Apply(m.Tracks[track], Length(track), edits));
+        return result!;
+    }
+
+    /// <summary>A deep copy of a track's steps (notes, probabilities, locks) for undo.</summary>
+    public TrackData SnapshotTrack(int track)
+    {
+        CheckTrack(track);
+        lock (_gate) return _editing.Model.Tracks[track].Clone();
+    }
+
+    /// <summary>Replaces a track's steps by (a copy of) a snapshot taken with <see cref="SnapshotTrack"/>; published atomically.</summary>
+    public void RestoreTrack(int track, TrackData snapshot)
+    {
+        CheckTrack(track);
+        Mutate(m => m.Tracks[track].CopyFrom(snapshot));
+    }
+
     /// <summary>Step probability 25..100 % (the DICE setting of the step).</summary>
     public void SetStepProbability(int track, int step, int percent)
     {

@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Sambient.App.ViewModels"
+             xmlns:c="using:Sambient.App.Controls"
              x:Class="Sambient.App.Views.SequencerPanel"
              x:DataType="vm:MainViewModel">
   <StackPanel Spacing="10">
@@ -8,6 +9,12 @@
     <Grid ColumnDefinitions="*,Auto">
       <WrapPanel VerticalAlignment="Center">
         <TextBlock Text="{Binding LayerTitle}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,14,0" />
+        <StackPanel Orientation="Horizontal" Spacing="2" Margin="0,0,14,0" VerticalAlignment="Center">
+          <Button Classes="seg" Classes.on="{Binding StepsViewVisible}" Content="STEPS" Command="{Binding ShowStepsViewCommand}"
+                  ToolTip.Tip="The 16-step button grid" />
+          <Button Classes="seg" Classes.on="{Binding PianoRollView}" Content="PIANO ROLL" Command="{Binding ShowPianoRollViewCommand}"
+                  ToolTip.Tip="Edit the notes of this layer's track on a pitch x time grid" />
+        </StackPanel>
         <ToggleButton Classes="small amber" Content="AUTO-STEP" IsChecked="{Binding AutoStep}" Margin="0,0,6,0"
                       ToolTip.Tip="Step record: advance the cursor when the keys are released" />
         <ToggleButton Classes="small amber" Content="TIE" IsChecked="{Binding TieMode}" Margin="0,0,6,0"
@@ -16,7 +23,7 @@
                       ToolTip.Tip="The visible page follows the playhead" />
         <TextBlock Text="{Binding TieHint}" Classes="caption" Foreground="#ffb454" VerticalAlignment="Center" />
       </WrapPanel>
-      <ItemsControl Grid.Column="1" ItemsSource="{Binding Pages}">
+      <ItemsControl Grid.Column="1" ItemsSource="{Binding Pages}" IsVisible="{Binding StepsViewVisible}">
         <ItemsControl.ItemsPanel>
           <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="2" /></ItemsPanelTemplate>
         </ItemsControl.ItemsPanel>
@@ -30,7 +37,7 @@
     </Grid>
 
     <!-- the 16 step buttons of the page -->
-    <ItemsControl x:Name="StepGridView" ItemsSource="{Binding StepCells}">
+    <ItemsControl x:Name="StepGridView" ItemsSource="{Binding StepCells}" IsVisible="{Binding StepsViewVisible}">
       <ItemsControl.ItemsPanel>
         <ItemsPanelTemplate><UniformGrid Columns="16" /></ItemsPanelTemplate>
       </ItemsControl.ItemsPanel>
@@ -56,6 +63,44 @@
         </DataTemplate>
       </ItemsControl.ItemTemplate>
     </ItemsControl>
+
+    <!-- piano roll -->
+    <StackPanel Spacing="6" IsVisible="{Binding PianoRollView}">
+      <WrapPanel>
+        <TextBlock Text="TOOL" Classes="caption" VerticalAlignment="Center" Margin="0,0,6,0" />
+        <StackPanel Orientation="Horizontal" Spacing="2" Margin="0,0,12,0" VerticalAlignment="Center">
+          <Button Classes="seg" Classes.on="{Binding IsRollDraw}" Content="DRAW" Command="{Binding SetRollToolCommand}" CommandParameter="Draw"
+                  ToolTip.Tip="Click an empty cell to add a note (drag to set its length). Drag a note to move it, drag its right edge to resize" />
+          <Button Classes="seg" Classes.on="{Binding IsRollSelect}" Content="SELECT" Command="{Binding SetRollToolCommand}" CommandParameter="Select"
+                  ToolTip.Tip="Drag a rectangle on empty space to select notes (Draw: hold Cmd/Ctrl)" />
+          <Button Classes="seg" Classes.on="{Binding IsRollErase}" Content="ERASE" Command="{Binding SetRollToolCommand}" CommandParameter="Erase"
+                  ToolTip.Tip="Click or sweep over notes to delete them (right-click always erases)" />
+        </StackPanel>
+        <ToggleButton Classes="small blue" Content="FOLD" IsChecked="{Binding RollFold}" Margin="0,0,6,0"
+                      ToolTip.Tip="Show only the pitches that hold notes" />
+        <ToggleButton Classes="small blue" Content="SCALE" IsChecked="{Binding RollScale}" IsEnabled="{Binding RollScaleAvailable}" Margin="0,0,12,0"
+                      ToolTip.Tip="Highlight the rows of the scale of the layer's key (PR.MJ / PR.MN temperaments)" />
+        <Button Classes="small" Content="UNDO" Command="{Binding RollUndoCommand}" Margin="0,0,4,0" ToolTip.Tip="Cmd/Ctrl+Z" />
+        <Button Classes="small" Content="REDO" Command="{Binding RollRedoCommand}" Margin="0,0,12,0" ToolTip.Tip="Shift+Cmd/Ctrl+Z" />
+        <TextBlock Text="PROB" Classes="caption" VerticalAlignment="Center" Margin="0,0,6,0" />
+        <StackPanel Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+          <Button Classes="seg" Content="25" MinWidth="30" Command="{Binding SetRollProbabilityCommand}" CommandParameter="25" ToolTip.Tip="Probability of the step(s) of the selected notes" />
+          <Button Classes="seg" Content="50" MinWidth="30" Command="{Binding SetRollProbabilityCommand}" CommandParameter="50" />
+          <Button Classes="seg" Content="75" MinWidth="30" Command="{Binding SetRollProbabilityCommand}" CommandParameter="75" />
+          <Button Classes="seg" Content="90" MinWidth="30" Command="{Binding SetRollProbabilityCommand}" CommandParameter="90" />
+          <Button Classes="seg" Content="100" MinWidth="34" Command="{Binding SetRollProbabilityCommand}" CommandParameter="100" />
+        </StackPanel>
+      </WrapPanel>
+      <Border CornerRadius="6" ClipToBounds="True" BorderBrush="#2b303a" BorderThickness="1">
+        <c:PianoRollControl x:Name="RollView" Editor="{Binding Roll}" Height="430" />
+      </Border>
+      <Grid ColumnDefinitions="Auto,*">
+        <TextBlock Text="{Binding RollInfoText}" FontSize="12" Foreground="#ffd9a0" VerticalAlignment="Center" MinWidth="220" />
+        <TextBlock Grid.Column="1" Text="{Binding RollStatusText}" FontSize="12" Foreground="#ffb454" VerticalAlignment="Center" />
+      </Grid>
+      <TextBlock Classes="caption" FontSize="10" TextWrapping="Wrap"
+                 Text="Click = add note (drag = length) · drag = move · right edge = resize · right-click / sweep = erase · Shift+click = add to selection · Cmd/Ctrl+drag = marquee · Cmd+A / C / V / Z · arrows nudge (Shift = octave) · Cmd+wheel = zoom time · Alt+wheel = zoom pitch · click the ruler to select a step, drag END to change the length" />
+    </StackPanel>
 
     <!-- selected step details -->
     <Border Classes="sub">

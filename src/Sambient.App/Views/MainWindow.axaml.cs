@@ -209,6 +209,8 @@ public partial class MainWindow : Window
     private void OnKeyDownTunnel(object? sender, KeyEventArgs e)
     {
         if (_keys == null || TextInputFocused()) return;
+        // the piano roll owns Delete / arrows / Cmd+A C V Z while it has focus (everything else falls through to the global shortcuts)
+        if (TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() is PianoRollControl roll && roll.HandleKeyDown(e)) { e.Handled = true; return; }
         if (HandleShortcut(e)) { e.Handled = true; return; }
         if (_keys.KeyDown(e)) e.Handled = true;
     }
